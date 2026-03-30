@@ -21,6 +21,8 @@ The repository also includes CI validation for clean-checkout test execution wit
 
 It now also includes explicit operational scripts for schema application and graph bootstrap / rebuild flows.
 
+The CI workflow also includes a separate smoke job path intended for full-stack HTTPS validation with Docker Compose, generated local TLS assets, and the repository smoke script.
+
 ## Repository layout
 
 - `docker/`
@@ -85,6 +87,7 @@ It now also includes explicit operational scripts for schema application and gra
 - schema application can be run explicitly
 - graph bootstrap and rebuild can be run explicitly
 - these operations are repeatable and intended for operator use
+- detailed operator procedures are documented under `docs/operations/` and the release checklist is documented separately
 
 ## Prerequisites
 
@@ -204,22 +207,10 @@ Recommended operations:
 - graph refresh by document
 - full graph rebuild
 
-Concrete examples:
+Detailed procedures have been moved to focused operator docs:
 
-- apply the repository-owned SQL files to a target database
-  - `uv run python scripts/apply_schema.py --database-url "postgresql://pggraphrag_app:change-me-db-password@pggraphrag-db:5432/pggraphrag" --verbose`
-
-- validate the schema apply plan without executing SQL
-  - `uv run python scripts/apply_schema.py --database-url "postgresql://pggraphrag_app:change-me-db-password@pggraphrag-db:5432/pggraphrag" --check-only`
-
-- inspect current graph projection status
-  - `PGGRAPHRAG_MCP_DATABASE_URL="postgresql://pggraphrag_app:change-me-db-password@pggraphrag-db:5432/pggraphrag" uv run python scripts/bootstrap_graph.py --status --pretty`
-
-- rebuild the full AGE graph projection
-  - `PGGRAPHRAG_MCP_DATABASE_URL="postgresql://pggraphrag_app:change-me-db-password@pggraphrag-db:5432/pggraphrag" uv run python scripts/bootstrap_graph.py --full-rebuild --pretty`
-
-- rebuild projection for one document only
-  - `PGGRAPHRAG_MCP_DATABASE_URL="postgresql://pggraphrag_app:change-me-db-password@pggraphrag-db:5432/pggraphrag" uv run python scripts/bootstrap_graph.py --document-id "<document-uuid>" --pretty`
+- `docs/operations/schema-apply.md`
+- `docs/operations/graph-bootstrap.md`
 
 These operations should be treated as explicit maintenance flows rather than implicit side effects of unrelated commands.
 
@@ -228,6 +219,15 @@ These operations should be treated as explicit maintenance flows rather than imp
 - `uv run ruff check .`
 - `python -m compileall src scripts tests`
 - `uv run pytest`
+
+### CI-equivalent local smoke validation
+
+This mirrors the intended CI smoke job behavior at a high level.
+
+Detailed smoke and CI validation steps are documented in:
+
+- `docs/operations/ci-and-smoke.md`
+- `docs/release-checklist.md`
 
 ### Stop the stack
 
@@ -360,41 +360,18 @@ The local stack is considered healthy when these conditions are met.
 
 The app emits JSON logs to make request tracing possible without Grafana.
 
+A concise overview is kept here, and detailed operator guidance should live in focused docs.
+
 Core fields include:
 
 - `timestamp`
 - `level`
 - `logger`
 - `message`
-
-Request and correlation fields include:
-
 - `request_id`
-- `authenticated_identity`
 - `event`
-- `method`
-- `path`
-- `query`
-- `status_code`
-- `duration_ms`
-- `client_host`
 
-Tool execution logs additionally include:
-
-- `tool_name`
-- `tool_arguments`
-
-Database bootstrap and startup logs additionally include:
-
-- `database_url` (redacted)
-- `age_graph_name`
-
-Recommended operator workflow for debugging one request:
-
-1. find the `request_id`
-2. follow auth acceptance or rejection in the auth service logs
-3. follow HTTP and tool execution logs in the private app logs
-4. correlate retrieval or ingest behavior with DB-backed status responses
+For deeper operational tracing guidance, use the focused operator docs rather than expanding this README.
 
 ## Notes and limitations
 
@@ -440,17 +417,12 @@ If the persisted volume contains an incompatible old state, rebuild from scratch
 - `make compose-up`
 
 ### Schema and graph operation issues
-If relational schema or graph projection state becomes inconsistent:
+If relational schema or graph projection state becomes inconsistent, follow the focused operator docs:
 
-- run the explicit schema-apply script
-  - `uv run python scripts/apply_schema.py --database-url "postgresql://pggraphrag_app:change-me-db-password@pggraphrag-db:5432/pggraphrag" --verbose`
-- inspect graph status
-  - `PGGRAPHRAG_MCP_DATABASE_URL="postgresql://pggraphrag_app:change-me-db-password@pggraphrag-db:5432/pggraphrag" uv run python scripts/bootstrap_graph.py --status --pretty`
-- run the explicit graph bootstrap or rebuild script
-  - `PGGRAPHRAG_MCP_DATABASE_URL="postgresql://pggraphrag_app:change-me-db-password@pggraphrag-db:5432/pggraphrag" uv run python scripts/bootstrap_graph.py --full-rebuild --pretty`
-- if only one document needs repair, refresh that document instead
-  - `PGGRAPHRAG_MCP_DATABASE_URL="postgresql://pggraphrag_app:change-me-db-password@pggraphrag-db:5432/pggraphrag" uv run python scripts/bootstrap_graph.py --document-id "<document-uuid>" --pretty`
-- re-run the smoke test after maintenance completes
+- `docs/operations/schema-apply.md`
+- `docs/operations/graph-bootstrap.md`
+
+Re-run the smoke flow after maintenance completes.
 
 ## Release readiness checklist
 
@@ -466,6 +438,10 @@ Use this checklist before tagging `v0.1.0`.
 - verify explicit maintenance commands work in the same environment:
   - `uv run python scripts/apply_schema.py --database-url "postgresql://pggraphrag_app:change-me-db-password@pggraphrag-db:5432/pggraphrag" --check-only`
   - `PGGRAPHRAG_MCP_DATABASE_URL="postgresql://pggraphrag_app:change-me-db-password@pggraphrag-db:5432/pggraphrag" uv run python scripts/bootstrap_graph.py --status --pretty`
+- verify the CI smoke-equivalent local flow succeeds:
+  - compose up with the small-auth overlay
+  - `scripts/mcp_http_smoke.py` against `https://localhost:9443/mcp`
+  - compose teardown after validation
 
 ### Verification
 - run `python -m compileall src scripts tests`
@@ -486,23 +462,11 @@ Use this checklist before tagging `v0.1.0`.
 
 ### CI validation workflow
 
-The repository is intended to validate clean-checkout behavior in CI with two jobs:
+The detailed CI and smoke workflow is documented in:
 
-#### `lint`
-- Python 3.12
-- `uv`-based dependency setup
-- `uv run ruff check .`
+- `docs/operations/ci-and-smoke.md`
 
-#### `test`
-- Python 3.12
-- `uv`-based dependency setup
-- bytecode / import compilation via `python -m compileall src scripts tests`
-- test execution via `uv run pytest`
-
-The CI scope is intentionally lightweight:
-- it validates repository correctness without requiring a live Azure environment
-- it does not require a remote embedding API key for the default local test path
-- it mirrors the recommended local validation commands before a release or major merge
+The README keeps only the high-level pointer so operational detail stays focused and easier to maintain.
 
 ### Public surface freeze
 Freeze these tool names for `v0.1.0`:
