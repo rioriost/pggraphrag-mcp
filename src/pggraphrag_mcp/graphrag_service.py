@@ -4,6 +4,7 @@ import math
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from .config import AppConfig
@@ -597,24 +598,32 @@ class GraphRAGApplicationService:
         *,
         elapsed_ms: float,
     ) -> dict[str, Any]:
+        raw_supporting_chunks = list(getattr(result, "supporting_chunks", []) or [])
+        raw_entities = list(getattr(result, "entities", []) or [])
+        raw_relationships = list(getattr(result, "relationships", []) or [])
+        raw_sources = list(getattr(result, "sources", []) or [])
+
         supporting_chunks = [
             self._normalize_chunk_result(item)
-            for item in list(getattr(result, "supporting_chunks", []) or [])
-        ][: self._config.max_return_chunks]
+            for item in raw_supporting_chunks[: self._config.max_return_chunks]
+        ]
 
         entities = [
             self._normalize_entity_result(item)
-            for item in list(getattr(result, "entities", []) or [])
-        ][: self._config.max_return_entities]
+            for item in raw_entities[: self._config.max_return_entities]
+        ]
 
         relationships = [
             self._normalize_relationship_result(item)
-            for item in list(getattr(result, "relationships", []) or [])
-        ][: self._config.max_return_entities]
+            for item in raw_relationships[: self._config.max_return_entities]
+        ]
 
+        max_sources = max(
+            self._config.max_return_chunks,
+            self._config.max_return_entities,
+        )
         sources = [
-            self._normalize_source_payload(item)
-            for item in list(getattr(result, "sources", []) or [])
+            self._normalize_source_payload(item) for item in raw_sources[:max_sources]
         ]
 
         confidence = self._bounded_confidence(getattr(result, "confidence", 0.0))
@@ -635,9 +644,23 @@ class GraphRAGApplicationService:
             "relationships": relationships,
             "sources": sources,
             "confidence": confidence,
+            "limits_applied": {
+                "requested_supporting_chunks": len(raw_supporting_chunks),
+                "returned_supporting_chunks": len(supporting_chunks),
+                "max_return_chunks": self._config.max_return_chunks,
+                "requested_entities": len(raw_entities),
+                "returned_entities": len(entities),
+                "max_return_entities": self._config.max_return_entities,
+                "requested_relationships": len(raw_relationships),
+                "returned_relationships": len(relationships),
+                "requested_sources": len(raw_sources),
+                "returned_sources": len(sources),
+                "max_sources": max_sources,
+            },
             "timings": self._normalize_timings(
                 getattr(result, "timings", None),
                 elapsed_ms=elapsed_ms,
+                operation="retrieval",
             ),
         }
 
@@ -720,6 +743,7 @@ class GraphRAGApplicationService:
                 "score": round(float(chunk.get("score", 0.0)), 4),
                 "source_uri": chunk.get("source_uri"),
                 "title": chunk.get("title"),
+                "metadata": dict(chunk.get("metadata", {}) or {}),
             }
         return {
             "chunk_id": str(getattr(chunk, "chunk_id")),
@@ -729,6 +753,7 @@ class GraphRAGApplicationService:
             "score": round(float(getattr(chunk, "score", 0.0)), 4),
             "source_uri": getattr(chunk, "source_uri", None),
             "title": getattr(chunk, "title", None),
+            "metadata": dict(getattr(chunk, "metadata", {}) or {}),
         }
 
     def _normalize_entity_result(self, entity: Any) -> dict[str, Any]:
@@ -776,6 +801,7 @@ class GraphRAGApplicationService:
                 "evidence_chunk_id": str(evidence_chunk_id)
                 if evidence_chunk_id is not None
                 else None,
+                "metadata": dict(relationship.get("metadata", {}) or {}),
             }
         evidence_chunk_id = getattr(relationship, "evidence_chunk_id", None)
         return {
@@ -787,6 +813,7 @@ class GraphRAGApplicationService:
             "relation_type": getattr(relationship, "relation_type", None),
             "weight": round(float(getattr(relationship, "weight", 0.0)), 4),
             "evidence_chunk_id": str(evidence_chunk_id) if evidence_chunk_id else None,
+            "metadata": dict(getattr(relationship, "metadata", {}) or {}),
         }
 
     def _normalize_entity_payload(
@@ -843,15 +870,24 @@ class GraphRAGApplicationService:
         timings: dict[str, Any] | None,
         *,
         elapsed_ms: float,
+        operation: str | None = None,
     ) -> dict[str, Any]:
         payload = dict(timings or {})
         payload["elapsed_ms"] = elapsed_ms
+        payload["elapsed_seconds"] = round(elapsed_ms / 1000.0, 6)
+        payload["finished_at"] = datetime.now(UTC).isoformat()
+        if operation is not None:
+            payload["operation"] = operation
         return payload
 
     def _bounded_top_k(self, value: int) -> int:
         if value <= 0:
             raise GraphRAGValidationError("top_k must be greater than zero.")
-        return min(int(value), int(self._config.max_return_chunks))
+        return min(
+            int(value),
+            int(self._config.max_return_chunks),
+            int(self._config.max_vector_candidates),
+        )
 
     def _bounded_graph_limit(self, value: int | None) -> int:
         limit = (
@@ -859,7 +895,11 @@ class GraphRAGApplicationService:
         )
         if limit <= 0:
             raise GraphRAGValidationError("graph_limit must be greater than zero.")
-        return min(limit, int(self._config.max_return_entities))
+        return min(
+            limit,
+            int(self._config.max_return_entities),
+            int(self._config.max_vector_candidates),
+        )
 
     def _bounded_entity_limit(self, value: int) -> int:
         if value <= 0:
@@ -869,7 +909,7 @@ class GraphRAGApplicationService:
     def _bounded_hops(self, value: int) -> int:
         if value <= 0:
             raise GraphRAGValidationError("hops must be greater than zero.")
-        return min(int(value), int(self._config.max_graph_hops))
+        return min(int(value), int(self._config.max_graph_hops), 4)
 
     def _bounded_confidence(self, value: float) -> float:
         if math.isnan(value) or math.isinf(value):

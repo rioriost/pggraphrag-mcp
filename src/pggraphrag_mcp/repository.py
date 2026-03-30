@@ -2,15 +2,195 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import re
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Iterable, Sequence
+from typing import Any, Mapping, Sequence
 
 import psycopg
 from psycopg.rows import dict_row
+
+from .embeddings import (
+    EmbeddingProvider,
+    EmbeddingProviderError,
+    create_embedding_provider,
+)
+
+LOGGER = logging.getLogger(__name__)
+
+
+def lexical_overlap_score(query: str, text: str) -> float:
+    query_tokens = set(tokenize(query))
+    text_tokens = set(tokenize(text))
+    if not query_tokens:
+        return 0.0
+    return len(query_tokens & text_tokens) / max(1, len(query_tokens))
+
+
+def jaccard_similarity_score(query: str, text: str) -> float:
+    query_tokens = set(tokenize(query))
+    text_tokens = set(tokenize(text))
+    if not query_tokens and not text_tokens:
+        return 0.0
+    union = query_tokens | text_tokens
+    if not union:
+        return 0.0
+    return len(query_tokens & text_tokens) / len(union)
+
+
+def phrase_match_score(query: str, text: str) -> float:
+    normalized_query = normalize_text(query).lower()
+    normalized_text = normalize_text(text).lower()
+    if not normalized_query or not normalized_text:
+        return 0.0
+    if normalized_query in normalized_text:
+        return 1.0
+    query_terms = normalized_query.split(" ")
+    if len(query_terms) > 1 and all(term in normalized_text for term in query_terms):
+        return 0.75
+    return 0.0
+
+
+def proximity_score(query: str, text: str) -> float:
+    query_terms = [term for term in tokenize(query) if term]
+    text_terms = [term for term in tokenize(text) if term]
+    if len(query_terms) < 2 or not text_terms:
+        return 0.0
+
+    positions: list[int] = []
+    for term in query_terms:
+        try:
+            positions.append(text_terms.index(term))
+        except ValueError:
+            continue
+
+    if len(positions) < 2:
+        return 0.0
+
+    span = max(positions) - min(positions)
+    if span <= 1:
+        return 1.0
+    return max(0.0, 1.0 - min(span, 12) / 12.0)
+
+
+def recency_score(rank: int, total_count: int) -> float:
+    if total_count <= 1:
+        return 1.0
+    return max(0.0, 1.0 - (rank / max(1, total_count - 1)))
+
+
+def _score_profile(profile: str) -> dict[str, float]:
+    if profile == "hybrid":
+        return {
+            "embedding": 0.36,
+            "lexical": 0.18,
+            "jaccard": 0.08,
+            "phrase": 0.10,
+            "proximity": 0.06,
+            "entity": 0.10,
+            "relation": 0.09,
+            "recency": 0.03,
+        }
+    return {
+        "embedding": 0.42,
+        "lexical": 0.22,
+        "jaccard": 0.10,
+        "phrase": 0.12,
+        "proximity": 0.06,
+        "entity": 0.05,
+        "relation": 0.00,
+        "recency": 0.03,
+    }
+
+
+def rerank_chunk_candidates(
+    *,
+    query: str,
+    candidates: Sequence[dict[str, Any]],
+    entity_names_by_chunk_id: Mapping[uuid.UUID, Sequence[str]] | None = None,
+    relation_count_by_chunk_id: Mapping[uuid.UUID, int] | None = None,
+    profile: str = "naive",
+) -> list[dict[str, Any]]:
+    entity_names_by_chunk_id = entity_names_by_chunk_id or {}
+    relation_count_by_chunk_id = relation_count_by_chunk_id or {}
+    weights = _score_profile(profile)
+
+    reranked: list[dict[str, Any]] = []
+    normalized_query = normalize_text(query)
+    query_tokens = set(tokenize(normalized_query))
+    total_candidates = len(candidates)
+
+    for rank, candidate in enumerate(candidates):
+        chunk_id = candidate["chunk_id"]
+        text = candidate["text"]
+        embedding_score = float(
+            candidate.get("embedding_score", candidate.get("score", 0.0))
+        )
+        lexical_score = lexical_overlap_score(normalized_query, text)
+        jaccard_score = jaccard_similarity_score(normalized_query, text)
+        phrase_score = phrase_match_score(normalized_query, text)
+        proximity = proximity_score(normalized_query, text)
+
+        entity_names = entity_names_by_chunk_id.get(chunk_id, [])
+        entity_hit_score = 0.0
+        matched_entity_names: list[str] = []
+        for entity_name in entity_names:
+            entity_tokens = set(tokenize(entity_name))
+            if query_tokens & entity_tokens:
+                entity_hit_score = 1.0
+                matched_entity_names.append(entity_name)
+
+        relation_count = relation_count_by_chunk_id.get(chunk_id, 0)
+        relation_score = min(1.0, relation_count / 3.0)
+        recency = recency_score(rank, total_candidates)
+
+        final_score = (
+            (embedding_score * weights["embedding"])
+            + (lexical_score * weights["lexical"])
+            + (jaccard_score * weights["jaccard"])
+            + (phrase_score * weights["phrase"])
+            + (proximity * weights["proximity"])
+            + (entity_hit_score * weights["entity"])
+            + (relation_score * weights["relation"])
+            + (recency * weights["recency"])
+        )
+
+        reranked.append(
+            {
+                **candidate,
+                "score": round(final_score, 6),
+                "score_breakdown": {
+                    "profile": profile,
+                    "embedding_similarity": round(embedding_score, 6),
+                    "lexical_overlap": round(lexical_score, 6),
+                    "jaccard_similarity": round(jaccard_score, 6),
+                    "phrase_match": round(phrase_score, 6),
+                    "term_proximity": round(proximity, 6),
+                    "entity_hit": round(entity_hit_score, 6),
+                    "relation_evidence": round(relation_score, 6),
+                    "relation_count": relation_count,
+                    "matched_entity_names": matched_entity_names,
+                    "recency": round(recency, 6),
+                    "weights": {key: round(value, 4) for key, value in weights.items()},
+                    "final_score": round(final_score, 6),
+                },
+            }
+        )
+
+    reranked.sort(
+        key=lambda item: (
+            -float(item["score"]),
+            -float(item["score_breakdown"]["embedding_similarity"]),
+            -float(item["score_breakdown"]["lexical_overlap"]),
+            item["chunk_no"],
+        )
+    )
+    return reranked
+
 
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?。！？])\s+|\n{2,}")
@@ -238,6 +418,8 @@ class GraphRagRepository:
         *,
         age_graph_name: str,
         embedding_dimensions: int = 1536,
+        embedding_provider_name: str = "openai",
+        embedding_model_name: str = "text-embedding-3-small",
         max_return_chunks: int = 12,
         max_return_entities: int = 20,
         max_graph_hops: int = 2,
@@ -250,6 +432,9 @@ class GraphRagRepository:
         self._max_return_entities = max_return_entities
         self._max_graph_hops = max_graph_hops
         self._app_name = app_name
+        self._embedding_provider_name = embedding_provider_name
+        self._embedding_model_name = embedding_model_name
+        self._embedding_provider = self._build_embedding_provider()
 
     def connection(self) -> psycopg.Connection[Any]:
         return psycopg.connect(
@@ -257,6 +442,66 @@ class GraphRagRepository:
             row_factory=dict_row,
             application_name=self._app_name,
         )
+
+    def _log_db_span(
+        self,
+        *,
+        operation: str,
+        started_at: float,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        payload: dict[str, Any] = {
+            "event": "db_span",
+            "db_operation": operation,
+            "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+        }
+        if extra:
+            payload.update(extra)
+        LOGGER.info("Repository DB span", extra=payload)
+
+    def _bounded_top_k(self, value: int) -> int:
+        if value < 1:
+            raise ValueError("top_k must be greater than zero.")
+        return min(value, self._max_return_chunks)
+
+    def _bounded_graph_limit(self, value: int) -> int:
+        if value < 1:
+            raise ValueError("graph_limit must be greater than zero.")
+        return min(value, self._max_return_entities)
+
+    def _bounded_hops(self, value: int) -> int:
+        if value < 1:
+            raise ValueError("hops must be greater than zero.")
+        return min(value, self._max_graph_hops)
+
+    def _build_embedding_provider(self) -> EmbeddingProvider:
+        try:
+            return create_embedding_provider(
+                provider_name=self._embedding_provider_name,
+                model_name=self._embedding_model_name,
+                dimensions=self._embedding_dimensions,
+            )
+        except EmbeddingProviderError:
+            return create_embedding_provider(
+                provider_name="deterministic",
+                model_name="deterministic-placeholder-v1",
+                dimensions=self._embedding_dimensions,
+            )
+
+    def _embed_text(self, text: str, *, input_type: str) -> tuple[list[float], str]:
+        try:
+            vector = self._embedding_provider.embed_text(text, input_type=input_type)
+            provider_mode = getattr(
+                self._embedding_provider,
+                "provider_mode",
+                self._embedding_provider.provider_name,
+            )
+            return vector.to_list(), str(provider_mode)
+        except EmbeddingProviderError:
+            return (
+                deterministic_embedding(text, self._embedding_dimensions),
+                "deterministic-fallback",
+            )
 
     # ---------------------------------------------------------------------
     # Ingestion
@@ -386,31 +631,53 @@ class GraphRagRepository:
         if not normalized_query:
             raise ValueError("Query must not be empty.")
 
+        effective_top_k = self._bounded_top_k(top_k)
         retrieval_id = uuid.uuid4()
-        query_embedding = deterministic_embedding(
-            normalized_query, self._embedding_dimensions
+        query_embedding, query_embedding_mode = self._embed_text(
+            normalized_query,
+            input_type="query",
         )
 
+        started_at = time.perf_counter()
         with self.connection() as conn:
             candidates = self._rank_chunks_by_similarity(
                 conn,
                 query=query,
                 query_embedding=query_embedding,
-                top_k=min(top_k, self._max_return_chunks),
+                top_k=effective_top_k,
             )
-            supporting_chunks = [self._chunk_payload(item) for item in candidates]
-            sources = [self._source_payload(item) for item in candidates]
+            chunk_ids = [item["chunk_id"] for item in candidates]
+            entity_names_by_chunk_id = self._entity_names_by_chunk_ids(conn, chunk_ids)
+            relation_count_by_chunk_id = self._relation_count_by_chunk_ids(
+                conn, chunk_ids
+            )
+            reranked_candidates = rerank_chunk_candidates(
+                query=normalized_query,
+                candidates=candidates,
+                entity_names_by_chunk_id=entity_names_by_chunk_id,
+                relation_count_by_chunk_id=relation_count_by_chunk_id,
+                profile="naive",
+            )
+            supporting_chunks = [
+                self._chunk_payload(item) for item in reranked_candidates
+            ]
+            sources = [self._source_payload(item) for item in reranked_candidates]
             summary = self._build_summary_from_chunks(
                 normalized_query,
-                [item["text"] for item in candidates],
+                [item["text"] for item in reranked_candidates],
             )
             confidence = round(
-                max((item["score"] for item in candidates), default=0.0),
+                max((item["score"] for item in reranked_candidates), default=0.0),
                 4,
             )
             timings = {
-                "strategy": "deterministic-local",
-                "candidate_count": len(candidates),
+                "strategy": "deterministic-local-reranked",
+                "candidate_count": len(reranked_candidates),
+                "requested_top_k": top_k,
+                "effective_top_k": effective_top_k,
+                "embedding_provider": self._embedding_provider.provider_name,
+                "embedding_model": self._embedding_provider.model_name,
+                "embedding_provider_mode": query_embedding_mode,
             }
 
             self._insert_retrieval_log(
@@ -418,8 +685,23 @@ class GraphRagRepository:
                 retrieval_id=retrieval_id,
                 query_text=normalized_query,
                 mode="naive",
-                returned_source_ids=[str(item["chunk_id"]) for item in candidates],
+                returned_source_ids=[
+                    str(item["chunk_id"]) for item in reranked_candidates
+                ],
                 timings=timings,
+            )
+            self._log_db_span(
+                operation="retrieve_naive",
+                started_at=started_at,
+                extra={
+                    "retrieval_id": str(retrieval_id),
+                    "requested_top_k": top_k,
+                    "effective_top_k": effective_top_k,
+                    "candidate_count": len(reranked_candidates),
+                    "embedding_provider": self._embedding_provider.provider_name,
+                    "embedding_model": self._embedding_provider.model_name,
+                    "embedding_provider_mode": query_embedding_mode,
+                },
             )
 
             return RetrievalResult(
@@ -504,8 +786,8 @@ class GraphRagRepository:
         hops: int = 1,
         limit: int = 20,
     ) -> dict[str, Any]:
-        effective_hops = max(1, min(hops, self._max_graph_hops))
-        effective_limit = min(limit, self._max_return_entities)
+        effective_hops = self._bounded_hops(hops)
+        effective_limit = self._bounded_graph_limit(limit)
 
         with self.connection() as conn:
             root_entity = self._get_entity(conn, entity_id)
@@ -567,17 +849,21 @@ class GraphRagRepository:
         top_k: int = 5,
         graph_limit: int = 20,
     ) -> RetrievalResult:
-        naive = self.retrieve_naive(query=query, top_k=top_k)
+        effective_top_k = self._bounded_top_k(top_k)
+        effective_graph_limit = self._bounded_graph_limit(graph_limit)
+
+        naive = self.retrieve_naive(query=query, top_k=effective_top_k)
         supporting_chunk_ids = [
             uuid.UUID(item["chunk_id"]) for item in naive.supporting_chunks
         ]
 
+        started_at = time.perf_counter()
         with self.connection() as conn:
             entities = self._entities_for_chunks(conn, supporting_chunk_ids)
             relationships = self._relationships_for_entity_ids(
                 conn,
                 [uuid.UUID(item["entity_id"]) for item in entities],
-                limit=min(graph_limit, self._max_return_entities),
+                limit=effective_graph_limit,
             )
             sources = [self._source_payload(item) for item in naive.sources]
             for relation in relationships:
@@ -591,6 +877,19 @@ class GraphRagRepository:
                     ):
                         sources.append(source)
 
+            reranked_supporting_chunks = rerank_chunk_candidates(
+                query=query,
+                candidates=list(naive.supporting_chunks),
+                entity_names_by_chunk_id=self._entity_names_by_chunk_ids(
+                    conn,
+                    [uuid.UUID(item["chunk_id"]) for item in naive.supporting_chunks],
+                ),
+                relation_count_by_chunk_id=self._relation_count_by_chunk_ids(
+                    conn,
+                    [uuid.UUID(item["chunk_id"]) for item in naive.supporting_chunks],
+                ),
+                profile="hybrid",
+            )
             summary = naive.summary
             if entities:
                 sample_names = ", ".join(
@@ -600,8 +899,8 @@ class GraphRagRepository:
 
             retrieval_id = uuid.uuid4()
             timings = {
-                "strategy": "naive_plus_local_graph",
-                "chunk_count": len(naive.supporting_chunks),
+                "strategy": "naive_plus_local_graph_reranked",
+                "chunk_count": len(reranked_supporting_chunks),
                 "entity_count": len(entities),
                 "relationship_count": len(relationships),
             }
@@ -614,14 +913,33 @@ class GraphRagRepository:
                 returned_source_ids=[
                     str(item["chunk_id"]) for item in sources if item.get("chunk_id")
                 ],
-                timings=timings,
+                timings={
+                    **timings,
+                    "requested_top_k": top_k,
+                    "effective_top_k": effective_top_k,
+                    "requested_graph_limit": graph_limit,
+                    "effective_graph_limit": effective_graph_limit,
+                },
+            )
+            self._log_db_span(
+                operation="retrieve_local_graph",
+                started_at=started_at,
+                extra={
+                    "retrieval_id": str(retrieval_id),
+                    "requested_top_k": top_k,
+                    "effective_top_k": effective_top_k,
+                    "requested_graph_limit": graph_limit,
+                    "effective_graph_limit": effective_graph_limit,
+                    "entity_count": len(entities),
+                    "relationship_count": len(relationships),
+                },
             )
 
             return RetrievalResult(
                 retrieval_id=retrieval_id,
                 summary=summary,
                 mode="local_graph",
-                supporting_chunks=[dict(item) for item in naive.supporting_chunks],
+                supporting_chunks=[dict(item) for item in reranked_supporting_chunks],
                 entities=[dict(item) for item in entities],
                 relationships=[dict(item) for item in relationships],
                 sources=[dict(item) for item in sources],
@@ -636,10 +954,13 @@ class GraphRagRepository:
         top_k: int = 5,
         graph_limit: int = 20,
     ) -> RetrievalResult:
+        effective_top_k = self._bounded_top_k(top_k)
+        effective_graph_limit = self._bounded_graph_limit(graph_limit)
+
         local_graph = self.retrieve_local_graph(
             query=query,
-            top_k=top_k,
-            graph_limit=graph_limit,
+            top_k=effective_top_k,
+            graph_limit=effective_graph_limit,
         )
 
         enriched_entities = list(local_graph.entities)
@@ -656,6 +977,66 @@ class GraphRagRepository:
             4,
         )
 
+        reranked_supporting_chunks = []
+        for rank, item in enumerate(local_graph.supporting_chunks):
+            relation_bonus = 0.0
+            supporting_relation_types: list[str] = []
+            for relationship in enriched_relationships:
+                if relationship.get("evidence_chunk_id") == item.get("chunk_id"):
+                    relation_bonus = min(relation_bonus + 0.2, 1.0)
+                    relation_type = relationship.get("relation_type")
+                    if relation_type and relation_type not in supporting_relation_types:
+                        supporting_relation_types.append(str(relation_type))
+
+            base_score = float(item.get("score", 0.0))
+            lexical_score = lexical_overlap_score(query, item.get("text", ""))
+            jaccard_score = jaccard_similarity_score(query, item.get("text", ""))
+            phrase_score = phrase_match_score(query, item.get("text", ""))
+            proximity = proximity_score(query, item.get("text", ""))
+            recency = recency_score(rank, len(local_graph.supporting_chunks))
+
+            final_score = (
+                (base_score * 0.50)
+                + (lexical_score * 0.16)
+                + (jaccard_score * 0.06)
+                + (phrase_score * 0.08)
+                + (proximity * 0.05)
+                + (relation_bonus * 0.12)
+                + (recency * 0.03)
+            )
+
+            reranked_supporting_chunks.append(
+                {
+                    **dict(item),
+                    "score": round(final_score, 6),
+                    "score_breakdown": {
+                        "profile": "hybrid-secondary",
+                        "base_rank_score": round(base_score, 6),
+                        "lexical_overlap": round(lexical_score, 6),
+                        "jaccard_similarity": round(jaccard_score, 6),
+                        "phrase_match": round(phrase_score, 6),
+                        "term_proximity": round(proximity, 6),
+                        "relation_evidence": round(relation_bonus, 6),
+                        "supporting_relation_types": supporting_relation_types,
+                        "recency": round(recency, 6),
+                        "weights": {
+                            "base_rank_score": 0.50,
+                            "lexical_overlap": 0.16,
+                            "jaccard_similarity": 0.06,
+                            "phrase_match": 0.08,
+                            "term_proximity": 0.05,
+                            "relation_evidence": 0.12,
+                            "recency": 0.03,
+                        },
+                        "final_score": round(final_score, 6),
+                    },
+                }
+            )
+
+        reranked_supporting_chunks.sort(
+            key=lambda item: (-float(item["score"]), item["chunk_no"])
+        )
+
         summary = local_graph.summary
         if enriched_relationships:
             top_relation = enriched_relationships[0]
@@ -667,13 +1048,14 @@ class GraphRagRepository:
 
         retrieval_id = uuid.uuid4()
         timings = {
-            "strategy": "hybrid",
-            "chunk_count": len(local_graph.supporting_chunks),
+            "strategy": "hybrid-reranked",
+            "chunk_count": len(reranked_supporting_chunks),
             "entity_count": len(enriched_entities),
             "relationship_count": len(enriched_relationships),
             "source_count": len(sources),
         }
 
+        started_at = time.perf_counter()
         with self.connection() as conn:
             self._insert_retrieval_log(
                 conn,
@@ -683,14 +1065,34 @@ class GraphRagRepository:
                 returned_source_ids=[
                     str(item["chunk_id"]) for item in sources if item.get("chunk_id")
                 ],
-                timings=timings,
+                timings={
+                    **timings,
+                    "requested_top_k": top_k,
+                    "effective_top_k": effective_top_k,
+                    "requested_graph_limit": graph_limit,
+                    "effective_graph_limit": effective_graph_limit,
+                },
+            )
+            self._log_db_span(
+                operation="retrieve_hybrid",
+                started_at=started_at,
+                extra={
+                    "retrieval_id": str(retrieval_id),
+                    "requested_top_k": top_k,
+                    "effective_top_k": effective_top_k,
+                    "requested_graph_limit": graph_limit,
+                    "effective_graph_limit": effective_graph_limit,
+                    "entity_count": len(enriched_entities),
+                    "relationship_count": len(enriched_relationships),
+                    "source_count": len(sources),
+                },
             )
 
         return RetrievalResult(
             retrieval_id=retrieval_id,
             summary=summary,
             mode="hybrid",
-            supporting_chunks=[dict(item) for item in local_graph.supporting_chunks],
+            supporting_chunks=[dict(item) for item in reranked_supporting_chunks],
             entities=[dict(item) for item in enriched_entities],
             relationships=[dict(item) for item in enriched_relationships],
             sources=[dict(item) for item in sources],
@@ -765,6 +1167,7 @@ class GraphRagRepository:
             projected_chunks = 0
             projected_entities = 0
             projected_relations = 0
+            refresh_scope = "document" if document_id else "full"
 
             for current_document_id in document_ids:
                 document = self._get_document(conn, current_document_id)
@@ -813,6 +1216,32 @@ class GraphRagRepository:
                     self._upsert_age_relation_edge(cur, relation)
                     projected_relations += 1
 
+            node_count = projected_documents + projected_chunks + projected_entities
+            edge_count = (
+                projected_chunks
+                + projected_relations
+                + sum(
+                    1 for _ in self._chunk_entity_rows_for_documents(conn, document_ids)
+                )
+            )
+            self._insert_graph_refresh_log(
+                conn,
+                graph_name=self._age_graph_name,
+                refresh_scope=refresh_scope,
+                document_id=document_id,
+                node_count=node_count,
+                edge_count=edge_count,
+                status="completed",
+                metadata={
+                    "full_rebuild": full_rebuild,
+                    "document_count": len(document_ids),
+                    "projected_documents": projected_documents,
+                    "projected_chunks": projected_chunks,
+                    "projected_entities": projected_entities,
+                    "projected_relations": projected_relations,
+                },
+            )
+
             return {
                 "graph_name": self._age_graph_name,
                 "document_scope": str(document_id) if document_id else "all",
@@ -821,6 +1250,10 @@ class GraphRagRepository:
                 "projected_chunks": projected_chunks,
                 "projected_entities": projected_entities,
                 "projected_relations": projected_relations,
+                "refresh_scope": refresh_scope,
+                "node_count": node_count,
+                "edge_count": edge_count,
+                "status": "completed",
             }
 
     # ---------------------------------------------------------------------
@@ -918,10 +1351,16 @@ class GraphRagRepository:
         for index, chunk_body in enumerate(chunk_texts):
             chunk_id = uuid.uuid4()
             token_count = len(tokenize(chunk_body))
-            embedding = deterministic_embedding(chunk_body, self._embedding_dimensions)
+            embedding, provider_mode = self._embed_text(
+                chunk_body,
+                input_type="document",
+            )
             chunk_metadata = {
                 "char_count": len(chunk_body),
-                "embedding_provider": "deterministic-local",
+                "embedding_provider": self._embedding_provider.provider_name,
+                "embedding_model": self._embedding_provider.model_name,
+                "embedding_dimensions": self._embedding_provider.dimensions,
+                "embedding_provider_mode": provider_mode,
                 **metadata,
             }
 
@@ -973,15 +1412,26 @@ class GraphRagRepository:
         entity_records_by_id: dict[uuid.UUID, EntityRecord] = {}
 
         for chunk in chunk_records:
-            names = self._extract_candidate_entities(chunk.text)
-            names = names[: self._max_return_entities]
+            extracted_entities = self._extract_candidate_entities(chunk.text)
+            names = [item["canonical_name"] for item in extracted_entities][
+                : self._max_return_entities
+            ]
             associated_ids: list[uuid.UUID] = []
+            mention_metadata_by_name = {
+                item["canonical_name"]: item for item in extracted_entities
+            }
 
             for name in names:
+                mention_metadata = mention_metadata_by_name.get(name, {})
                 entity = self._get_or_create_entity(
                     conn,
                     canonical_name=name,
                     entity_type=self._infer_entity_type(name),
+                    aliases=mention_metadata.get("aliases", []),
+                    metadata={
+                        "extractor": "heuristic-v2",
+                        "token_basis": mention_metadata.get("token_basis", []),
+                    },
                 )
                 entity_records_by_id[entity.entity_id] = entity
                 associated_ids.append(entity.entity_id)
@@ -1004,17 +1454,53 @@ class GraphRagRepository:
                         (
                             chunk.chunk_id,
                             entity.entity_id,
-                            self._mention_count(chunk.text, name),
-                            json_dumps({"extractor": "heuristic-v1"}),
+                            int(mention_metadata.get("mention_count", 1)),
+                            json_dumps(
+                                {
+                                    "extractor": "heuristic-v2",
+                                    "entity_type": mention_metadata.get("entity_type"),
+                                    "aliases": mention_metadata.get("aliases", []),
+                                    "token_basis": mention_metadata.get(
+                                        "token_basis", []
+                                    ),
+                                    "start_offset": mention_metadata.get(
+                                        "start_offset"
+                                    ),
+                                    "end_offset": mention_metadata.get("end_offset"),
+                                }
+                            ),
                         ),
                     )
 
             chunk_entity_ids[chunk.chunk_id] = associated_ids
 
-        relation_records: list[RelationRecord] = []
+        relation_records_by_id: dict[uuid.UUID, RelationRecord] = {}
         for chunk in chunk_records:
             entity_ids = chunk_entity_ids.get(chunk.chunk_id, [])
             if len(entity_ids) < 2:
+                continue
+
+            chunk_relations = self._extract_candidate_relations(
+                chunk.text,
+                entity_records_by_id=entity_records_by_id,
+            )
+            if chunk_relations:
+                for relation_candidate in chunk_relations:
+                    relation = self._upsert_relation_fact(
+                        conn,
+                        source_entity_id=relation_candidate["source_entity_id"],
+                        target_entity_id=relation_candidate["target_entity_id"],
+                        relation_type=relation_candidate["relation_type"],
+                        evidence_chunk_id=chunk.chunk_id,
+                        weight=relation_candidate["weight"],
+                        metadata={
+                            "extractor": "heuristic-v2",
+                            "pattern": relation_candidate["pattern"],
+                            "token_distance": relation_candidate["token_distance"],
+                            "evidence_strength": "pattern-match",
+                        },
+                    )
+                    relation_records_by_id[relation.relation_fact_id] = relation
                 continue
 
             for left_index in range(len(entity_ids) - 1):
@@ -1028,10 +1514,18 @@ class GraphRagRepository:
                     target_entity_id=target_entity_id,
                     relation_type=relation_type,
                     evidence_chunk_id=chunk.chunk_id,
+                    weight=0.25,
+                    metadata={
+                        "extractor": "heuristic-v2",
+                        "pattern": "fallback-adjacent",
+                        "evidence_strength": "weak-fallback",
+                    },
                 )
-                relation_records.append(relation)
+                relation_records_by_id[relation.relation_fact_id] = relation
 
-        return list(entity_records_by_id.values()), relation_records
+        return list(entity_records_by_id.values()), list(
+            relation_records_by_id.values()
+        )
 
     def _get_or_create_entity(
         self,
@@ -1039,7 +1533,14 @@ class GraphRagRepository:
         *,
         canonical_name: str,
         entity_type: str,
+        aliases: Sequence[str] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> EntityRecord:
+        aliases = [
+            alias for alias in (aliases or []) if alias and alias != canonical_name
+        ]
+        metadata = metadata or {}
+
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1058,7 +1559,39 @@ class GraphRagRepository:
             )
             row = cur.fetchone()
             if row:
-                return self._entity_from_row(row)
+                existing = self._entity_from_row(row)
+                merged_aliases = sorted(
+                    {
+                        *existing.aliases,
+                        *aliases,
+                    }
+                )
+                merged_metadata = {
+                    **existing.metadata,
+                    **metadata,
+                }
+                cur.execute(
+                    """
+                    UPDATE entity
+                    SET aliases = %s::jsonb,
+                        metadata = %s::jsonb
+                    WHERE entity_id = %s
+                    RETURNING
+                        entity_id,
+                        canonical_name,
+                        entity_type,
+                        aliases,
+                        metadata,
+                        created_at
+                    """,
+                    (
+                        json_dumps(merged_aliases),
+                        json_dumps(merged_metadata),
+                        existing.entity_id,
+                    ),
+                )
+                updated = cur.fetchone()
+                return self._entity_from_row(updated)
 
             entity_id = uuid.uuid4()
             cur.execute(
@@ -1084,8 +1617,8 @@ class GraphRagRepository:
                     entity_id,
                     canonical_name,
                     entity_type,
-                    json_dumps([]),
-                    json_dumps({"extractor": "heuristic-v1"}),
+                    json_dumps(sorted(set(aliases))),
+                    json_dumps({"extractor": "heuristic-v2", **metadata}),
                     utc_now(),
                 ),
             )
@@ -1100,7 +1633,11 @@ class GraphRagRepository:
         target_entity_id: uuid.UUID,
         relation_type: str,
         evidence_chunk_id: uuid.UUID,
+        weight: float = 1.0,
+        metadata: dict[str, Any] | None = None,
     ) -> RelationRecord:
+        metadata = metadata or {}
+
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1129,7 +1666,35 @@ class GraphRagRepository:
             )
             existing = cur.fetchone()
             if existing:
-                return self._relation_from_row(existing)
+                existing_record = self._relation_from_row(existing)
+                merged_metadata = {
+                    **existing_record.metadata,
+                    **metadata,
+                }
+                cur.execute(
+                    """
+                    UPDATE relation_fact
+                    SET weight = %s,
+                        metadata = %s::jsonb
+                    WHERE relation_fact_id = %s
+                    RETURNING
+                        relation_fact_id,
+                        source_entity_id,
+                        target_entity_id,
+                        relation_type,
+                        weight,
+                        evidence_chunk_id,
+                        metadata,
+                        created_at
+                    """,
+                    (
+                        float(weight),
+                        json_dumps(merged_metadata),
+                        existing_record.relation_fact_id,
+                    ),
+                )
+                updated = cur.fetchone()
+                return self._relation_from_row(updated)
 
             relation_fact_id = uuid.uuid4()
             cur.execute(
@@ -1160,9 +1725,9 @@ class GraphRagRepository:
                     source_entity_id,
                     target_entity_id,
                     relation_type,
-                    1.0,
+                    float(weight),
                     evidence_chunk_id,
-                    json_dumps({"extractor": "heuristic-v1"}),
+                    json_dumps({"extractor": "heuristic-v2", **metadata}),
                     utc_now(),
                 ),
             )
@@ -1249,6 +1814,72 @@ class GraphRagRepository:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM document WHERE document_id = %s", (document_id,))
             return cur.rowcount > 0
+
+    def _insert_graph_refresh_log(
+        self,
+        conn: psycopg.Connection[Any],
+        *,
+        graph_name: str,
+        refresh_scope: str,
+        document_id: uuid.UUID | None,
+        node_count: int,
+        edge_count: int,
+        status: str,
+        metadata: dict[str, Any],
+    ) -> None:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO graph_refresh_log (
+                    graph_refresh_id,
+                    graph_name,
+                    scope,
+                    document_id,
+                    node_count,
+                    edge_count,
+                    status,
+                    metadata,
+                    created_at,
+                    updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s)
+                """,
+                (
+                    uuid.uuid4(),
+                    graph_name,
+                    refresh_scope,
+                    document_id,
+                    node_count,
+                    edge_count,
+                    status,
+                    json_dumps(metadata),
+                    utc_now(),
+                    utc_now(),
+                ),
+            )
+
+    def _chunk_entity_rows_for_documents(
+        self,
+        conn: psycopg.Connection[Any],
+        document_ids: Sequence[uuid.UUID],
+    ) -> list[dict[str, Any]]:
+        if not document_ids:
+            return []
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    ce.chunk_id,
+                    ce.entity_id,
+                    ce.mention_count
+                FROM chunk_entity ce
+                JOIN chunk c
+                  ON c.chunk_id = ce.chunk_id
+                WHERE c.document_id = ANY(%s)
+                """,
+                (list(document_ids),),
+            )
+            return list(cur.fetchall())
 
     # ---------------------------------------------------------------------
     # Internal graph helpers
@@ -1444,21 +2075,12 @@ class GraphRagRepository:
             )
             rows = list(cur.fetchall())
 
-        query_tokens = set(tokenize(query))
         scored: list[dict[str, Any]] = []
 
         for row in rows:
             chunk_embedding = self._parse_vector_text(row["embedding_text"])
             embedding_score = cosine_similarity(query_embedding, chunk_embedding)
-            chunk_tokens = set(tokenize(row["text"]))
-            lexical_overlap = (
-                len(query_tokens & chunk_tokens) / max(1, len(query_tokens))
-                if query_tokens
-                else 0.0
-            )
-            score = (embedding_score * 0.7) + (lexical_overlap * 0.3)
-
-            if score <= 0.0:
+            if embedding_score <= 0.0:
                 continue
 
             scored.append(
@@ -1471,7 +2093,8 @@ class GraphRagRepository:
                     "metadata": row["metadata"] or {},
                     "source_uri": row["source_uri"],
                     "title": row["title"],
-                    "score": round(score, 6),
+                    "embedding_score": round(embedding_score, 6),
+                    "score": round(embedding_score, 6),
                 }
             )
 
@@ -1700,6 +2323,62 @@ class GraphRagRepository:
         if not sources:
             return None
         return self._source_payload(sources[0])
+
+    def _entity_names_by_chunk_ids(
+        self,
+        conn: psycopg.Connection[Any],
+        chunk_ids: Sequence[uuid.UUID],
+    ) -> dict[uuid.UUID, list[str]]:
+        if not chunk_ids:
+            return {}
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    ce.chunk_id,
+                    e.canonical_name
+                FROM chunk_entity ce
+                JOIN entity e
+                  ON e.entity_id = ce.entity_id
+                WHERE ce.chunk_id = ANY(%s)
+                ORDER BY ce.chunk_id, e.canonical_name
+                """,
+                (list(chunk_ids),),
+            )
+            rows = cur.fetchall()
+
+        result: dict[uuid.UUID, list[str]] = {}
+        for row in rows:
+            result.setdefault(row["chunk_id"], []).append(row["canonical_name"])
+        return result
+
+    def _relation_count_by_chunk_ids(
+        self,
+        conn: psycopg.Connection[Any],
+        chunk_ids: Sequence[uuid.UUID],
+    ) -> dict[uuid.UUID, int]:
+        if not chunk_ids:
+            return {}
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    evidence_chunk_id AS chunk_id,
+                    COUNT(*) AS relation_count
+                FROM relation_fact
+                WHERE evidence_chunk_id = ANY(%s)
+                GROUP BY evidence_chunk_id
+                """,
+                (list(chunk_ids),),
+            )
+            rows = cur.fetchall()
+
+        result: dict[uuid.UUID, int] = {}
+        for row in rows:
+            result[row["chunk_id"]] = int(row["relation_count"])
+        return result
 
     def _get_entity(
         self,
@@ -1932,7 +2611,7 @@ class GraphRagRepository:
         if isinstance(source, dict):
             document_id = source.get("document_id")
             chunk_id = source.get("chunk_id")
-            return {
+            payload = {
                 "document_id": str(document_id) if document_id is not None else None,
                 "chunk_id": str(chunk_id) if chunk_id is not None else None,
                 "source_uri": source.get("source_uri"),
@@ -1940,6 +2619,11 @@ class GraphRagRepository:
                 "chunk_no": source.get("chunk_no"),
                 "snippet": source.get("snippet"),
             }
+            if "score" in source:
+                payload["score"] = round(float(source.get("score", 0.0)), 6)
+            if "score_breakdown" in source:
+                payload["score_breakdown"] = dict(source.get("score_breakdown", {}))
+            return payload
         return {
             "document_id": str(source.document_id),
             "chunk_id": str(source.chunk_id),
@@ -1953,20 +2637,66 @@ class GraphRagRepository:
     # Heuristic extraction helpers
     # ---------------------------------------------------------------------
 
-    def _extract_candidate_entities(self, text: str) -> list[str]:
-        candidates = re.findall(r"\b(?:[A-Z][a-z0-9]+(?:\s+[A-Z][a-z0-9]+)*)\b", text)
-        filtered: list[str] = []
+    def _extract_candidate_entities(self, text: str) -> list[dict[str, Any]]:
+        sentence_matches = list(re.finditer(r"[^.!?。！？]+(?:[.!?。！？]|$)", text))
+        filtered: list[dict[str, Any]] = []
         seen: set[str] = set()
 
-        for candidate in candidates:
-            normalized = normalize_text(candidate)
-            if len(normalized) < 2:
-                continue
-            lowered = normalized.lower()
-            if lowered in seen:
-                continue
-            seen.add(lowered)
-            filtered.append(normalized)
+        for sentence_match in sentence_matches:
+            sentence_text = sentence_match.group(0)
+            sentence_start = sentence_match.start()
+
+            candidates = re.finditer(
+                r"\b(?:[A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9]+)*)\b",
+                sentence_text,
+            )
+
+            for match in candidates:
+                raw_candidate = match.group(0)
+                normalized = normalize_text(raw_candidate)
+                if len(normalized) < 3:
+                    continue
+
+                normalized = self._trim_entity_phrase_boundary(normalized)
+                if len(normalized) < 3:
+                    continue
+                if self._is_noise_entity_candidate(normalized):
+                    continue
+
+                lowered = self._canonical_entity_key(normalized)
+                if lowered in seen:
+                    continue
+                seen.add(lowered)
+
+                token_basis = normalized.split(" ")
+                aliases = self._build_entity_aliases(normalized, token_basis)
+                mention_count = self._mention_count(text, normalized)
+
+                local_start = match.start()
+                start_offset = sentence_start + local_start
+                end_offset = start_offset + len(normalized)
+
+                filtered.append(
+                    {
+                        "canonical_name": normalized,
+                        "entity_type": self._infer_entity_type(normalized),
+                        "aliases": aliases,
+                        "token_basis": token_basis,
+                        "mention_count": mention_count,
+                        "start_offset": start_offset,
+                        "end_offset": end_offset,
+                        "sentence_start_offset": sentence_start,
+                        "sentence_end_offset": sentence_match.end(),
+                    }
+                )
+
+        filtered.sort(
+            key=lambda item: (
+                -int(item["mention_count"]),
+                int(item["start_offset"]),
+                item["canonical_name"],
+            )
+        )
         return filtered
 
     def _infer_entity_type(self, name: str) -> str:
@@ -1975,6 +2705,8 @@ class GraphRagRepository:
         if "Team" in name or "Department" in name:
             return "organization"
         if "Project" in name or "System" in name or "Platform" in name:
+            return "system"
+        if "API" in name or "Service" in name:
             return "system"
         return "concept"
 
@@ -1989,9 +2721,270 @@ class GraphRagRepository:
             return "USES"
         if "contains" in lowered or "includes" in lowered:
             return "CONTAINS"
+        if "connects to" in lowered or "connected to" in lowered:
+            return "CONNECTS_TO"
+        if "part of" in lowered or "belongs to" in lowered:
+            return "PART_OF"
         if "relates to" in lowered:
             return "RELATES_TO"
         return "CO_OCCURS_WITH"
+
+    def _extract_candidate_relations(
+        self,
+        text: str,
+        *,
+        entity_records_by_id: dict[uuid.UUID, EntityRecord],
+    ) -> list[dict[str, Any]]:
+        if not entity_records_by_id:
+            return []
+
+        relation_patterns: list[tuple[str, str]] = [
+            ("DEPENDS_ON", "depends on"),
+            ("USES", "uses"),
+            ("CONTAINS", "contains"),
+            ("CONNECTS_TO", "connects to"),
+            ("PART_OF", "part of"),
+            ("RELATES_TO", "relates to"),
+        ]
+
+        entity_mentions = self._extract_candidate_entities(text)
+        if not entity_mentions:
+            return []
+
+        entity_by_name = {
+            self._canonical_entity_key(entity.canonical_name): entity
+            for entity in entity_records_by_id.values()
+        }
+        matched_mentions: list[dict[str, Any]] = []
+        for mention in entity_mentions:
+            canonical_name = self._canonical_entity_key(str(mention["canonical_name"]))
+            entity = entity_by_name.get(canonical_name)
+            if entity is None:
+                continue
+            matched_mentions.append(
+                {
+                    **mention,
+                    "entity_id": entity.entity_id,
+                }
+            )
+
+        relations: list[dict[str, Any]] = []
+        for sentence_match in re.finditer(r"[^.!?。！？]+(?:[.!?。！？]|$)", text):
+            sentence_text = sentence_match.group(0)
+            sentence_start = sentence_match.start()
+            lowered_sentence = sentence_text.lower()
+
+            sentence_mentions = [
+                item
+                for item in matched_mentions
+                if int(item["start_offset"]) >= sentence_start
+                and int(item["end_offset"]) <= sentence_match.end()
+            ]
+
+            if len(sentence_mentions) < 2:
+                continue
+
+            for relation_type, pattern in relation_patterns:
+                pattern_start = lowered_sentence.find(pattern)
+                if pattern_start == -1:
+                    continue
+
+                absolute_pattern_start = sentence_start + pattern_start
+                absolute_pattern_end = absolute_pattern_start + len(pattern)
+
+                source_candidates = [
+                    item
+                    for item in sentence_mentions
+                    if int(item["end_offset"]) <= absolute_pattern_start
+                ]
+                target_candidates = [
+                    item
+                    for item in sentence_mentions
+                    if int(item["start_offset"]) >= absolute_pattern_end
+                ]
+
+                if not source_candidates or not target_candidates:
+                    continue
+
+                source = max(
+                    source_candidates,
+                    key=lambda item: (
+                        int(item["end_offset"]),
+                        int(item["mention_count"]),
+                    ),
+                )
+                target = min(
+                    target_candidates,
+                    key=lambda item: (
+                        int(item["start_offset"]),
+                        -int(item["mention_count"]),
+                    ),
+                )
+
+                if source["entity_id"] == target["entity_id"]:
+                    continue
+
+                token_distance = max(
+                    1,
+                    len(
+                        tokenize(
+                            text[
+                                int(source["end_offset"]) : int(target["start_offset"])
+                            ]
+                        )
+                    ),
+                )
+                if token_distance > 8:
+                    continue
+
+                weight = round(
+                    max(
+                        0.6,
+                        1.0 - ((token_distance - 1) * 0.03),
+                    ),
+                    4,
+                )
+
+                relations.append(
+                    {
+                        "source_entity_id": source["entity_id"],
+                        "target_entity_id": target["entity_id"],
+                        "relation_type": relation_type,
+                        "weight": weight,
+                        "pattern": pattern,
+                        "token_distance": token_distance,
+                        "sentence_start_offset": sentence_start,
+                        "sentence_end_offset": sentence_match.end(),
+                    }
+                )
+
+        deduped: list[dict[str, Any]] = []
+        seen_keys: set[tuple[uuid.UUID, uuid.UUID, str]] = set()
+        for relation in relations:
+            key = (
+                relation["source_entity_id"],
+                relation["target_entity_id"],
+                relation["relation_type"],
+            )
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            deduped.append(relation)
+        return deduped
+
+    def _is_noise_entity_candidate(self, candidate: str) -> bool:
+        generic_singletons = {
+            "Graph",
+            "Memory",
+            "Source",
+            "Trace",
+            "Evidence",
+            "Bundle",
+            "System",
+            "Service",
+            "Project",
+            "Platform",
+            "Data",
+            "Model",
+            "Cache",
+            "Store",
+            "Worker",
+            "Engine",
+            "Control",
+            "Plane",
+            "Node",
+            "Metadata",
+        }
+        if candidate in generic_singletons:
+            return True
+
+        token_basis = candidate.split(" ")
+        if len(token_basis) == 1:
+            token = token_basis[0]
+            if len(token) <= 4 and token.isalpha():
+                return True
+            if token.lower() in {
+                "service",
+                "system",
+                "platform",
+                "project",
+                "engine",
+                "worker",
+                "store",
+                "cache",
+                "model",
+            }:
+                return True
+
+        return False
+
+    def _build_entity_aliases(
+        self,
+        normalized: str,
+        token_basis: list[str],
+    ) -> list[str]:
+        aliases: set[str] = set()
+
+        if len(token_basis) > 1:
+            compact = normalized.replace(" ", "")
+            if compact != normalized and len(compact) > 4:
+                aliases.add(compact)
+
+        if len(token_basis) > 2:
+            initials = "".join(token[0] for token in token_basis if token)
+            if len(initials) > 1:
+                aliases.add(initials)
+
+        return sorted(
+            {
+                alias
+                for alias in aliases
+                if alias != normalized and not self._is_noise_entity_candidate(alias)
+            }
+        )
+
+    def _trim_entity_phrase_boundary(self, candidate: str) -> str:
+        token_basis = candidate.split(" ")
+
+        leading_prefix_tokens = {
+            "The",
+            "This",
+            "That",
+            "These",
+            "Those",
+        }
+        leading_generic_role_tokens = {
+            "Platform",
+            "Project",
+            "Service",
+            "System",
+            "Module",
+            "Layer",
+        }
+        trailing_conjunction_tokens = {"And", "Or", "But"}
+        trailing_generic_role_tokens = {
+            "Service",
+            "System",
+            "Module",
+            "Layer",
+        }
+
+        while token_basis and token_basis[0] in leading_prefix_tokens:
+            token_basis = token_basis[1:]
+
+        while len(token_basis) > 2 and token_basis[0] in leading_generic_role_tokens:
+            token_basis = token_basis[1:]
+
+        while token_basis and token_basis[-1] in trailing_conjunction_tokens:
+            token_basis = token_basis[:-1]
+
+        while len(token_basis) > 2 and token_basis[-1] in trailing_generic_role_tokens:
+            token_basis = token_basis[:-1]
+
+        return " ".join(token_basis).strip()
+
+    def _canonical_entity_key(self, value: str) -> str:
+        return normalize_text(value).replace(" ", "").lower()
 
     def _entity_name_score(self, query: str, canonical_name: str) -> float:
         normalized = canonical_name.lower()

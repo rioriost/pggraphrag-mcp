@@ -306,14 +306,16 @@ class Database:
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS graph_refresh_log (
-                    graph_refresh_log_id uuid PRIMARY KEY,
+                    graph_refresh_id uuid PRIMARY KEY,
                     graph_name text NOT NULL,
-                    refresh_scope text NOT NULL,
-                    document_id uuid,
+                    scope text NOT NULL,
+                    document_id uuid REFERENCES document(document_id) ON DELETE CASCADE,
                     node_count integer NOT NULL DEFAULT 0,
                     edge_count integer NOT NULL DEFAULT 0,
                     status text NOT NULL,
-                    created_at timestamptz NOT NULL DEFAULT now()
+                    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+                    created_at timestamptz NOT NULL DEFAULT now(),
+                    updated_at timestamptz NOT NULL DEFAULT now()
                 )
                 """
             )

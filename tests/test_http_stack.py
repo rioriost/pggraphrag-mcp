@@ -9,7 +9,6 @@ from pggraphrag_mcp.auth_app import AuthSettings
 from pggraphrag_mcp.auth_app import create_app as create_auth_app
 from pggraphrag_mcp.config import AppConfig
 from pggraphrag_mcp.db import DatabaseStatus
-from pggraphrag_mcp.graphrag_service import GraphRAGValidationError
 from pggraphrag_mcp.http_app import create_app as create_http_app
 from pggraphrag_mcp.http_app import normalize_tool_params
 from scripts.mcp_http_smoke import (

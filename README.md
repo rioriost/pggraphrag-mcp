@@ -17,6 +17,8 @@ The current implementation targets a local Docker Compose workflow with:
 - a private FastAPI-based MCP app
 - PostgreSQL 17 with `pgvector` and `Apache AGE`
 
+The repository also includes CI validation for clean-checkout test execution with Python 3.12 and `uv`.
+
 ## Repository layout
 
 - `docker/`
@@ -128,6 +130,10 @@ Run:
 
 `COMPOSE_PROJECT_NAME=pggraphrag_mcp make compose-up`
 
+The verified local default public endpoint is:
+
+- `https://localhost:9443/mcp`
+
 This starts:
 
 - `pggraphrag-db`
@@ -145,9 +151,16 @@ Run:
 
 Run:
 
-`uv run python scripts/mcp_http_smoke.py --base-url https://localhost:8443 --mcp-path /mcp --bearer-token change-me-local-token --insecure`
+`uv run python scripts/mcp_http_smoke.py --base-url https://localhost:9443 --mcp-path /mcp --bearer-token change-me-local-token --insecure`
 
-If everything is healthy, the script exits successfully and prints a JSON summary.
+If everything is healthy, the script exits successfully and prints a JSON summary covering:
+
+- unauthorized rejection
+- authenticated `health_check`
+- authenticated `index_status`
+- seeded `document_ingest`
+- authenticated `retrieve_hybrid`
+- authenticated `source_trace`
 
 ## Local development commands
 
@@ -163,6 +176,7 @@ If everything is healthy, the script exits successfully and prints a JSON summar
 ### Lint
 
 - `make lint`
+- `uv run ruff check .`
 
 ### Test
 
@@ -172,6 +186,12 @@ If everything is healthy, the script exits successfully and prints a JSON summar
 
 - `make smoke`
 
+### CI-equivalent local validation
+
+- `uv run ruff check .`
+- `python -m compileall src scripts tests`
+- `uv run pytest`
+
 ### Stop the stack
 
 - `COMPOSE_PROJECT_NAME=pggraphrag_mcp make compose-down`
@@ -179,7 +199,7 @@ If everything is healthy, the script exits successfully and prints a JSON summar
 ## MCP endpoint behavior
 
 ### Public entrypoint
-- `https://localhost:8443/mcp`
+- `https://localhost:9443/mcp`
 
 ### Access pattern
 - the client calls the proxy over HTTPS
@@ -198,7 +218,7 @@ Example `health_check` request payload:
 
 Example `curl`:
 
-`curl -k https://localhost:8443/mcp -H "Authorization: Bearer change-me-local-token" -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","id":"example-1","method":"tools/call","params":{"name":"health_check","arguments":{}}}'`
+`curl -k https://localhost:9443/mcp -H "Authorization: Bearer change-me-local-token" -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","id":"example-1","method":"tools/call","params":{"name":"health_check","arguments":{}}}'`
 
 The current `POST /mcp` response shape is JSON-RPC. Successful calls return:
 
@@ -241,6 +261,19 @@ Common local settings include:
 - `PGGRAPHRAG_MCP_DATABASE_URL`
 - `PGGRAPHRAG_MCP_AGE_GRAPH_NAME`
 
+### Embeddings
+- `PGGRAPHRAG_MCP_EMBEDDING_PROVIDER`
+- `PGGRAPHRAG_MCP_EMBEDDING_MODEL`
+- `PGGRAPHRAG_MCP_EMBEDDING_DIMENSIONS`
+- `OPENAI_API_KEY`
+
+Remote embedding behavior:
+- when `PGGRAPHRAG_MCP_EMBEDDING_PROVIDER=openai`, the app uses the OpenAI-compatible provider path
+- when `OPENAI_API_KEY` is available, that provider can use the configured OpenAI-backed mode
+- when `OPENAI_API_KEY` is missing or remote mode is unavailable, the app falls back to the local deterministic-compatible mode
+- the fallback keeps ingest and retrieval working in local development and test environments
+- response payloads and logs still report the configured embedding provider and model so you can tell which path is active
+
 ### Retrieval and limits
 - `PGGRAPHRAG_MCP_MAX_VECTOR_CANDIDATES`
 - `PGGRAPHRAG_MCP_MAX_GRAPH_HOPS`
@@ -282,20 +315,64 @@ The local stack is considered healthy when these conditions are met.
 - the smoke script passes
 - structured logs are emitted
 
+## Structured log fields
+
+The app emits JSON logs to make request tracing possible without Grafana.
+
+Core fields include:
+
+- `timestamp`
+- `level`
+- `logger`
+- `message`
+
+Request and correlation fields include:
+
+- `request_id`
+- `authenticated_identity`
+- `event`
+- `method`
+- `path`
+- `query`
+- `status_code`
+- `duration_ms`
+- `client_host`
+
+Tool execution logs additionally include:
+
+- `tool_name`
+- `tool_arguments`
+
+Database bootstrap and startup logs additionally include:
+
+- `database_url` (redacted)
+- `age_graph_name`
+
+Recommended operator workflow for debugging one request:
+
+1. find the `request_id`
+2. follow auth acceptance or rejection in the auth service logs
+3. follow HTTP and tool execution logs in the private app logs
+4. correlate retrieval or ingest behavior with DB-backed status responses
+
 ## Notes and limitations
 
-This is still a skeleton implementation.
+This is still an initial implementation milestone, but it now includes working end-to-end flows for:
 
-What is intentionally minimal right now:
-
-- document ingestion pipeline
-- embedding generation
-- entity and relation extraction
-- graph refresh from relational state
+- document ingestion into canonical PostgreSQL tables
+- embedding-backed retrieval
+- heuristic entity and relation extraction
+- AGE graph projection refresh
 - naive, local-graph, and hybrid retrieval
-- source trace resources
+- source trace responses
 
-Those are planned next layers on top of the current foundation.
+What remains intentionally lightweight right now:
+
+- OpenAI-compatible embedding support includes a local fallback path for environments without `OPENAI_API_KEY`
+- entity extraction and relation typing are heuristic rather than model-driven
+- graph refresh is functional but still a simple projection path
+
+Those are the next areas for improvement on top of the current milestone.
 
 ## Troubleshooting
 
@@ -312,6 +389,7 @@ Those are planned next layers on top of the current foundation.
 - use `--insecure` for the local smoke script when using self-signed certs
 - verify certificate and key paths
 - verify the Traefik mounts
+- verify you are testing against `https://localhost:9443`
 
 ### Database init issues
 If the persisted volume contains an incompatible old state, rebuild from scratch:
@@ -320,17 +398,92 @@ If the persisted volume contains an incompatible old state, rebuild from scratch
 - `docker volume rm pggraphrag_db_data`
 - `make compose-up`
 
+## Release readiness checklist
+
+Use this checklist before tagging `v0.1.0`.
+
+### Clean environment validation
+- copy `.env.example` to `.env`
+- provide valid local TLS certificate and key files
+- run `COMPOSE_PROJECT_NAME=pggraphrag_mcp make compose-up`
+- verify all services become healthy
+- run the smoke test successfully against `https://localhost:9443/mcp`
+- verify the same clean-environment path also works after recreating the database volume
+
+### Verification
+- run `python -m compileall src scripts tests`
+- run `uv run pytest`
+- verify authenticated `health_check`
+- verify authenticated `index_status`
+- verify `document_ingest`
+- verify `retrieve_hybrid`
+- verify `source_trace`
+- verify AGE projection counts are non-zero after ingest
+- verify the current suite includes hardening / release-readiness coverage in addition to HTTP and GraphRAG flow coverage
+- verify embedding configuration behaves as expected in both cases:
+  - with `OPENAI_API_KEY` present
+  - without `OPENAI_API_KEY`, using the documented fallback path
+
+### CI validation workflow
+
+The repository is intended to validate clean-checkout behavior in CI with two jobs:
+
+#### `lint`
+- Python 3.12
+- `uv`-based dependency setup
+- `uv run ruff check .`
+
+#### `test`
+- Python 3.12
+- `uv`-based dependency setup
+- bytecode / import compilation via `python -m compileall src scripts tests`
+- test execution via `uv run pytest`
+
+The CI scope is intentionally lightweight:
+- it validates repository correctness without requiring a live Azure environment
+- it does not require a remote embedding API key for the default local test path
+- it mirrors the recommended local validation commands before a release or major merge
+
+### Public surface freeze
+Freeze these tool names for `v0.1.0`:
+
+- `health_check`
+- `index_status`
+- `graph_status`
+- `document_ingest`
+- `document_reingest`
+- `document_delete`
+- `graph_refresh`
+- `rebuild_embeddings`
+- `retrieve_naive`
+- `entity_search`
+- `entity_expand`
+- `retrieve_local_graph`
+- `retrieve_hybrid`
+- `source_trace`
+
+### Operational review
+- verify structured logs contain `request_id`
+- verify auth logs and app logs can be correlated for one request
+- verify database URLs remain redacted in logs
+- verify private app and database are not directly exposed on the host
+- verify only the proxy publishes the external HTTPS port
+
+### Packaging and repository hygiene
+- remove local artifacts such as `.DS_Store`
+- ensure generated placeholder certificates are replaced or clearly documented for local-only use
+- confirm README quick start matches the actual compose and smoke commands
+- confirm commit history and working tree are clean before release tagging
+
 ## Next implementation areas
 
-After local skeleton validation, the next major steps are:
+After this milestone, the next major steps are:
 
-1. ingest pipeline
-2. embeddings integration
-3. entity and relation extraction
-4. graph refresh
-5. naive, local-graph, and hybrid retrieval
-6. source trace
-7. integration tests
+1. remote embedding provider implementation
+2. higher-quality entity and relation extraction
+3. graph refresh diffing and rebuild recovery
+4. retrieval scoring and reranking improvements
+5. broader integration and release automation
 
 ## License
 

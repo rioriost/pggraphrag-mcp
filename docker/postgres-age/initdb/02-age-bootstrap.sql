@@ -33,7 +33,7 @@ BEGIN
         FROM ag_catalog.cypher(
             'pggraphrag_memory',
             $cypher$
-                CREATE (:Document {bootstrap: true, created_by: 'initdb'});
+                CREATE (:Document {bootstrap: true, created_by: 'initdb'})
             $cypher$
         ) AS (v ag_catalog.agtype);
     END IF;
@@ -50,7 +50,7 @@ BEGIN
         FROM ag_catalog.cypher(
             'pggraphrag_memory',
             $cypher$
-                CREATE (:Chunk {bootstrap: true, created_by: 'initdb'});
+                CREATE (:Chunk {bootstrap: true, created_by: 'initdb'})
             $cypher$
         ) AS (v ag_catalog.agtype);
     END IF;
@@ -67,7 +67,7 @@ BEGIN
         FROM ag_catalog.cypher(
             'pggraphrag_memory',
             $cypher$
-                CREATE (:Entity {bootstrap: true, created_by: 'initdb'});
+                CREATE (:Entity {bootstrap: true, created_by: 'initdb'})
             $cypher$
         ) AS (v ag_catalog.agtype);
     END IF;
@@ -83,7 +83,7 @@ BEGIN
         $cypher$
             MATCH (n)
             WHERE coalesce(n.bootstrap, false) = true
-            DETACH DELETE n;
+            DETACH DELETE n
         $cypher$
     ) AS (v ag_catalog.agtype);
 EXCEPTION
