@@ -1,0 +1,126 @@
+version: 1
+project:
+  name: pggraphrag-mcp
+  objective: >-
+    Build a remote MCP server for GraphRAG on PostgreSQL with pgvector and Apache AGE,
+    using an HTTPS-first container topology aligned with ctxledger-style deployment.
+  constraints:
+    - grafana is excluded from the initial implementation
+    - app must be reachable only via HTTPS reverse proxy
+    - PostgreSQL remains canonical state
+    - AGE and pgvector are derived / accelerator layers
+    - arbitrary SQL and arbitrary Cypher must not be exposed
+  success_criteria:
+    - authenticated HTTPS /mcp endpoint is operational
+    - document ingest and hybrid retrieval work end-to-end
+    - source trace is returned for retrieval responses
+    - graph rebuild is repeatable
+    - smoke and integration tests pass
+phases:
+  - id: phase-0
+    name: Bootstrap repository and container skeleton
+    goal: Establish repo structure and ctxledger-like compose topology without Grafana
+    deliverables:
+      - repository layout
+      - base compose files
+      - env examples
+      - traefik/auth/private-app/db boot path
+    depends_on: []
+    tickets:
+      - T001
+      - T002
+      - T003
+  - id: phase-1
+    name: Storage baseline
+    goal: Provide PostgreSQL 17 image with pgvector and Apache AGE plus migration/bootstrap scripts
+    deliverables:
+      - postgres-age image
+      - schema migration scripts
+      - ensure_age_extension script
+      - bootstrap_graph script
+    depends_on:
+      - phase-0
+    tickets:
+      - T004
+      - T005
+      - T006
+  - id: phase-2
+    name: MCP skeleton
+    goal: Expose HTTPS-authenticated MCP endpoint and foundational tools/resources
+    deliverables:
+      - http app
+      - mcp tools/resources schema
+      - health/index/graph status tools
+      - smoke test
+    depends_on:
+      - phase-1
+    tickets:
+      - T007
+      - T008
+      - T009
+  - id: phase-3
+    name: Ingestion pipeline
+    goal: Ingest documents into canonical storage and derived graph/vector layers
+    deliverables:
+      - document ingest tool
+      - chunking pipeline
+      - embedding integration
+      - entity/relation extraction
+      - graph refresh flow
+    depends_on:
+      - phase-2
+    tickets:
+      - T010
+      - T011
+      - T012
+      - T013
+  - id: phase-4
+    name: Retrieval implementation
+    goal: Deliver naive, local graph, and hybrid retrieval with source trace
+    deliverables:
+      - retrieve_naive
+      - entity_search
+      - entity_expand
+      - retrieve_local_graph
+      - retrieve_hybrid
+      - source_trace
+    depends_on:
+      - phase-3
+    tickets:
+      - T014
+      - T015
+      - T016
+      - T017
+  - id: phase-5
+    name: Hardening and release
+    goal: Add limits, logs, tests, and release readiness
+    deliverables:
+      - payload and hop limits
+      - structured logging
+      - integration tests
+      - release checklist
+    depends_on:
+      - phase-4
+    tickets:
+      - T018
+      - T019
+      - T020
+release:
+  target_version: 0.1.0
+  included:
+    - https remote mcp endpoint
+    - small auth
+    - postgresql 17 + pgvector + apache age
+    - document ingest
+    - retrieve_naive
+    - retrieve_local_graph
+    - retrieve_hybrid
+    - entity_search and entity_expand
+    - source_trace
+    - smoke and integration tests
+  excluded:
+    - grafana
+    - oidc oauth2
+    - advanced multi-tenant rls
+    - distributed worker queue
+    - arbitrary sql/cypher console

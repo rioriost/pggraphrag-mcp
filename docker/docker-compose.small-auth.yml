@@ -1,0 +1,78 @@
+services:
+  pggraphrag-mcp-auth:
+    image: ${PGGRAPHRAG_MCP_AUTH_IMAGE:-pggraphrag-mcp-auth:local}
+    build:
+      context: ..
+      dockerfile: docker/auth/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      PGGRAPHRAG_MCP_APP_VERSION: ${PGGRAPHRAG_MCP_APP_VERSION:-0.1.0}
+      PGGRAPHRAG_MCP_LOG_LEVEL: ${PGGRAPHRAG_MCP_LOG_LEVEL:-INFO}
+      AUTH_SMALL_BEARER_TOKEN: ${PGGRAPHRAG_MCP_SMALL_AUTH_TOKEN:-change-me-local-token}
+      AUTH_SMALL_USER: ${PGGRAPHRAG_MCP_AUTH_IDENTITY:-pggraphrag-client}
+      AUTH_SMALL_MODE: ${PGGRAPHRAG_MCP_AUTH_MODE:-static-token}
+    expose:
+      - "8081"
+    command:
+      - uvicorn
+      - pggraphrag_mcp.auth_app:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8081"
+      - --proxy-headers
+      - --forwarded-allow-ips=*
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import urllib.request
+          urllib.request.urlopen("http://127.0.0.1:8081/healthz", timeout=2)
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - pggraphrag_app_net
+
+  pggraphrag-mcp-proxy:
+    image: traefik:v3.1
+    restart: unless-stopped
+    depends_on:
+      pggraphrag-mcp-auth:
+        condition: service_healthy
+      pggraphrag-mcp-private:
+        condition: service_healthy
+    env_file:
+      - ../.env
+    ports:
+      - "${PGGRAPHRAG_MCP_PROXY_PORT:-8443}:8443"
+    volumes:
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+      - ./traefik/certs:/certs:ro
+    healthcheck:
+      test:
+        - CMD
+        - traefik
+        - healthcheck
+        - --ping
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - edge_net
+      - pggraphrag_app_net
+
+networks:
+  edge_net:
+    name: ${PGGRAPHRAG_EDGE_NETWORK:-pggraphrag_edge_net}
+    driver: bridge
+  pggraphrag_app_net:
+    name: ${PGGRAPHRAG_APP_NETWORK:-pggraphrag_app_net}
+    external: true

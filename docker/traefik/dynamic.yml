@@ -1,0 +1,51 @@
+http:
+  routers:
+    mcp-router:
+      entryPoints:
+        - websecure
+      rule: "PathPrefix(`/mcp`)"
+      service: mcp-service
+      middlewares:
+        - mcp-auth
+      tls: {}
+
+    ready-router:
+      entryPoints:
+        - websecure
+      rule: "Path(`/readyz`)"
+      service: mcp-service
+      middlewares:
+        - mcp-auth
+      tls: {}
+
+    root-router:
+      entryPoints:
+        - websecure
+      rule: "Path(`/`)"
+      service: mcp-service
+      middlewares:
+        - mcp-auth
+      tls: {}
+
+  middlewares:
+    mcp-auth:
+      forwardAuth:
+        address: "http://pggraphrag-mcp-auth:8081/auth/verify"
+        trustForwardHeader: true
+        authRequestHeaders:
+          - Authorization
+          - Content-Type
+          - Content-Length
+          - X-Auth-Mode
+          - X-Forwarded-Authenticated-Uri
+          - X-Forwarded-Authenticated-Method
+        authResponseHeaders:
+          - X-Auth-User
+          - X-Request-Id
+
+  services:
+    mcp-service:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: "http://pggraphrag-mcp-private:8080"

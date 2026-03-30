@@ -1,0 +1,88 @@
+services:
+  pggraphrag-db:
+    build:
+      context: ..
+      dockerfile: docker/postgres-age/Dockerfile
+    image: ${PGGRAPHRAG_MCP_DB_IMAGE:-pggraphrag-db:local}
+    container_name: pggraphrag-db
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      POSTGRES_DB: ${PGGRAPHRAG_MCP_DB_NAME:-pggraphrag}
+      POSTGRES_USER: ${PGGRAPHRAG_MCP_DB_USER:-pggraphrag_app}
+      POSTGRES_PASSWORD: ${PGGRAPHRAG_MCP_DB_PASSWORD:-change-me-db-password}
+      PGGRAPHRAG_MCP_DB_NAME: ${PGGRAPHRAG_MCP_DB_NAME:-pggraphrag}
+      PGGRAPHRAG_MCP_DB_USER: ${PGGRAPHRAG_MCP_DB_USER:-pggraphrag_app}
+      PGGRAPHRAG_MCP_DB_PASSWORD: ${PGGRAPHRAG_MCP_DB_PASSWORD:-change-me-db-password}
+      PGGRAPHRAG_MCP_AGE_GRAPH_NAME: ${PGGRAPHRAG_MCP_AGE_GRAPH_NAME:-pggraphrag_memory}
+    volumes:
+      - pggraphrag_db_data:/var/lib/postgresql/data
+      - ../docker/postgres-age/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${PGGRAPHRAG_MCP_DB_USER:-pggraphrag_app} -d ${PGGRAPHRAG_MCP_DB_NAME:-pggraphrag}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - pggraphrag_app_net
+
+  pggraphrag-mcp-private:
+    build:
+      context: ..
+      dockerfile: docker/private-app/Dockerfile
+    image: ${PGGRAPHRAG_MCP_PRIVATE_IMAGE:-pggraphrag-mcp-private:local}
+    container_name: pggraphrag-mcp-private
+    restart: unless-stopped
+    depends_on:
+      pggraphrag-db:
+        condition: service_healthy
+    env_file:
+      - ../.env
+    environment:
+      PGGRAPHRAG_MCP_APP_NAME: ${PGGRAPHRAG_MCP_APP_NAME:-pggraphrag-mcp}
+      PGGRAPHRAG_MCP_APP_VERSION: ${PGGRAPHRAG_MCP_APP_VERSION:-0.1.0}
+      PGGRAPHRAG_MCP_ENV: ${PGGRAPHRAG_MCP_ENV:-local}
+      PGGRAPHRAG_MCP_HTTP_HOST: ${PGGRAPHRAG_MCP_HTTP_HOST:-0.0.0.0}
+      PGGRAPHRAG_MCP_HTTP_PORT: ${PGGRAPHRAG_MCP_HTTP_PORT:-8080}
+      PGGRAPHRAG_MCP_HTTP_PATH: ${PGGRAPHRAG_MCP_HTTP_PATH:-/mcp}
+      PGGRAPHRAG_MCP_ENABLE_DEBUG_ENDPOINTS: ${PGGRAPHRAG_MCP_ENABLE_DEBUG_ENDPOINTS:-true}
+      PGGRAPHRAG_MCP_LOG_LEVEL: ${PGGRAPHRAG_MCP_LOG_LEVEL:-INFO}
+      PGGRAPHRAG_MCP_DATABASE_URL: ${PGGRAPHRAG_MCP_DATABASE_URL:-postgresql://pggraphrag_app:change-me-db-password@pggraphrag-db:5432/pggraphrag}
+      PGGRAPHRAG_MCP_AGE_GRAPH_NAME: ${PGGRAPHRAG_MCP_AGE_GRAPH_NAME:-pggraphrag_memory}
+      PGGRAPHRAG_MCP_EMBEDDING_PROVIDER: ${PGGRAPHRAG_MCP_EMBEDDING_PROVIDER:-openai}
+      PGGRAPHRAG_MCP_EMBEDDING_MODEL: ${PGGRAPHRAG_MCP_EMBEDDING_MODEL:-text-embedding-3-small}
+      PGGRAPHRAG_MCP_EMBEDDING_DIMENSIONS: ${PGGRAPHRAG_MCP_EMBEDDING_DIMENSIONS:-1536}
+      PGGRAPHRAG_MCP_MAX_VECTOR_CANDIDATES: ${PGGRAPHRAG_MCP_MAX_VECTOR_CANDIDATES:-30}
+      PGGRAPHRAG_MCP_MAX_GRAPH_HOPS: ${PGGRAPHRAG_MCP_MAX_GRAPH_HOPS:-2}
+      PGGRAPHRAG_MCP_MAX_RETURN_CHUNKS: ${PGGRAPHRAG_MCP_MAX_RETURN_CHUNKS:-12}
+      PGGRAPHRAG_MCP_MAX_RETURN_ENTITIES: ${PGGRAPHRAG_MCP_MAX_RETURN_ENTITIES:-20}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    expose:
+      - "${PGGRAPHRAG_MCP_HTTP_PORT:-8080}"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request; urllib.request.urlopen(''http://127.0.0.1:${PGGRAPHRAG_MCP_HTTP_PORT:-8080}/readyz'', timeout=2)" >/dev/null 2>&1 || exit 1',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - pggraphrag_app_net
+
+networks:
+  pggraphrag_app_net:
+    name: ${PGGRAPHRAG_APP_NETWORK:-pggraphrag_app_net}
+    driver: bridge
+
+volumes:
+  pggraphrag_db_data:
+    name: ${PGGRAPHRAG_DB_VOLUME:-pggraphrag_db_data}

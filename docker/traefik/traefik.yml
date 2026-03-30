@@ -1,0 +1,35 @@
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
+
+log:
+  level: INFO
+  format: json
+
+accessLog:
+  format: json
+
+api:
+  dashboard: false
+  insecure: false
+
+ping: {}
+
+entryPoints:
+  websecure:
+    address: ":8443"
+
+providers:
+  file:
+    filename: /etc/traefik/dynamic.yml
+    watch: true
+
+serversTransport:
+  insecureSkipVerify: false
+
+tls:
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /certs/dev.crt
+        keyFile: /certs/dev.key
