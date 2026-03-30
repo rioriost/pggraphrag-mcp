@@ -1,0 +1,115 @@
+{
+  "version": "0.1.0",
+  "protocol": "remote-mcp-http",
+  "http_path": "/mcp",
+  "auth": {
+    "type": "bearer-forward-auth",
+    "forwarded_identity_headers": [
+      "x-auth-mode",
+      "x-auth-user",
+      "x-authenticated-identity",
+      "x-forwarded-authenticated-method",
+      "x-forwarded-authenticated-uri",
+      "x-request-id"
+    ]
+  },
+  "tools": [
+    {
+      "name": "health_check",
+      "category": "ops",
+      "status": "frozen"
+    },
+    {
+      "name": "index_status",
+      "category": "ops",
+      "status": "frozen"
+    },
+    {
+      "name": "graph_status",
+      "category": "ops",
+      "status": "frozen"
+    },
+    {
+      "name": "document_ingest",
+      "category": "ingestion",
+      "status": "frozen"
+    },
+    {
+      "name": "document_reingest",
+      "category": "ingestion",
+      "status": "frozen"
+    },
+    {
+      "name": "document_delete",
+      "category": "ingestion",
+      "status": "frozen"
+    },
+    {
+      "name": "graph_refresh",
+      "category": "ops",
+      "status": "frozen"
+    },
+    {
+      "name": "rebuild_embeddings",
+      "category": "ops",
+      "status": "frozen"
+    },
+    {
+      "name": "retrieve_naive",
+      "category": "retrieval",
+      "status": "frozen"
+    },
+    {
+      "name": "entity_search",
+      "category": "retrieval",
+      "status": "frozen"
+    },
+    {
+      "name": "entity_expand",
+      "category": "retrieval",
+      "status": "frozen"
+    },
+    {
+      "name": "retrieve_local_graph",
+      "category": "retrieval",
+      "status": "frozen"
+    },
+    {
+      "name": "retrieve_hybrid",
+      "category": "retrieval",
+      "status": "frozen"
+    },
+    {
+      "name": "source_trace",
+      "category": "retrieval",
+      "status": "frozen"
+    }
+  ],
+  "resources": [
+    {
+      "name": "document",
+      "uri_template": "graphrag://document/{document_id}",
+      "status": "frozen"
+    },
+    {
+      "name": "chunk",
+      "uri_template": "graphrag://chunk/{chunk_id}",
+      "status": "frozen"
+    },
+    {
+      "name": "entity",
+      "uri_template": "graphrag://entity/{entity_id}",
+      "status": "frozen"
+    },
+    {
+      "name": "retrieval",
+      "uri_template": "graphrag://retrieval/{retrieval_id}",
+      "status": "frozen"
+    },
+    {
+      "name": "graph-status",
+      "uri_template": "graphrag://graph/status",
+      "status": "frozen"
+    }
+  ]
+}

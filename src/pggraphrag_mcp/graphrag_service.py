@@ -170,12 +170,36 @@ class GraphRAGApplicationService:
     # ------------------------------------------------------------------
 
     def document_ingest(self, command: IngestDocumentCommand) -> dict[str, Any]:
-        tenant_id = self._require_text(command.tenant_id, field_name="tenant_id")
-        source_uri = self._require_text(command.source_uri, field_name="source_uri")
-        title = self._require_text(command.title, field_name="title")
-        text = self._require_text(command.text, field_name="text")
-        mime_type = self._require_text(command.mime_type, field_name="mime_type")
-        metadata = self._normalize_metadata(command.metadata)
+        tenant_id = self._require_text(
+            command.tenant_id,
+            field_name="tenant_id",
+            max_length=200,
+        )
+        source_uri = self._require_text(
+            command.source_uri,
+            field_name="source_uri",
+            max_length=2000,
+        )
+        title = self._require_text(
+            command.title,
+            field_name="title",
+            max_length=500,
+        )
+        text = self._require_text(
+            command.text,
+            field_name="text",
+            max_length=200_000,
+        )
+        mime_type = self._require_text(
+            command.mime_type,
+            field_name="mime_type",
+            max_length=200,
+        )
+        metadata = self._normalize_metadata(
+            command.metadata,
+            max_items=100,
+            max_string_length=4000,
+        )
 
         started = time.perf_counter()
         LOGGER.info(
@@ -218,12 +242,36 @@ class GraphRAGApplicationService:
         return payload
 
     def document_reingest(self, command: IngestDocumentCommand) -> dict[str, Any]:
-        tenant_id = self._require_text(command.tenant_id, field_name="tenant_id")
-        source_uri = self._require_text(command.source_uri, field_name="source_uri")
-        title = self._require_text(command.title, field_name="title")
-        text = self._require_text(command.text, field_name="text")
-        mime_type = self._require_text(command.mime_type, field_name="mime_type")
-        metadata = self._normalize_metadata(command.metadata)
+        tenant_id = self._require_text(
+            command.tenant_id,
+            field_name="tenant_id",
+            max_length=200,
+        )
+        source_uri = self._require_text(
+            command.source_uri,
+            field_name="source_uri",
+            max_length=2000,
+        )
+        title = self._require_text(
+            command.title,
+            field_name="title",
+            max_length=500,
+        )
+        text = self._require_text(
+            command.text,
+            field_name="text",
+            max_length=200_000,
+        )
+        mime_type = self._require_text(
+            command.mime_type,
+            field_name="mime_type",
+            max_length=200,
+        )
+        metadata = self._normalize_metadata(
+            command.metadata,
+            max_items=100,
+            max_string_length=4000,
+        )
 
         started = time.perf_counter()
         LOGGER.info(
@@ -294,7 +342,14 @@ class GraphRAGApplicationService:
     # ------------------------------------------------------------------
 
     def graph_refresh(self, command: GraphRefreshCommand) -> dict[str, Any]:
-        if command.document_id is not None and command.full_rebuild:
+        document_id: uuid.UUID | None = None
+        if command.document_id is not None:
+            document_id = self._coerce_uuid(
+                command.document_id,
+                field_name="document_id",
+            )
+
+        if document_id is not None and command.full_rebuild:
             raise GraphRAGValidationError(
                 "document_id and full_rebuild cannot be used together."
             )
@@ -303,7 +358,7 @@ class GraphRAGApplicationService:
         with self._repository.connection() as conn:
             summary = self._repository.graph_refresh(
                 conn=conn,
-                document_id=command.document_id,
+                document_id=document_id,
                 full_rebuild=command.full_rebuild,
             )
 
@@ -932,12 +987,22 @@ class GraphRAGApplicationService:
                 f"{field_name} must be a valid UUID."
             ) from exc
 
-    def _require_text(self, value: Any, *, field_name: str) -> str:
+    def _require_text(
+        self,
+        value: Any,
+        *,
+        field_name: str,
+        max_length: int | None = None,
+    ) -> str:
         if not isinstance(value, str):
             raise GraphRAGValidationError(f"{field_name} must be a string.")
         normalized = " ".join(value.split()).strip()
         if not normalized:
             raise GraphRAGValidationError(f"{field_name} must not be empty.")
+        if max_length is not None and len(normalized) > max_length:
+            raise GraphRAGValidationError(
+                f"{field_name} must be <= {max_length} characters."
+            )
         return normalized
 
     def _require_text_or_default(self, value: Any, *, default: str) -> str:
@@ -946,12 +1011,73 @@ class GraphRAGApplicationService:
         normalized = " ".join(value.split()).strip()
         return normalized or default
 
-    def _normalize_metadata(self, value: dict[str, Any] | None) -> dict[str, Any]:
+    def _normalize_metadata(
+        self,
+        value: dict[str, Any] | None,
+        *,
+        max_items: int | None = None,
+        max_string_length: int | None = None,
+    ) -> dict[str, Any]:
         if value is None:
             return {}
         if not isinstance(value, dict):
             raise GraphRAGValidationError("metadata must be a JSON object.")
-        return dict(value)
+        if max_items is not None and len(value) > max_items:
+            raise GraphRAGValidationError(
+                f"metadata must contain at most {max_items} entries."
+            )
+
+        normalized: dict[str, Any] = {}
+        for key, item in value.items():
+            normalized_key = str(key)
+            if (
+                max_string_length is not None
+                and len(normalized_key) > max_string_length
+            ):
+                raise GraphRAGValidationError(
+                    f"metadata keys must be <= {max_string_length} characters."
+                )
+            normalized[normalized_key] = self._normalize_metadata_value(
+                item,
+                max_string_length=max_string_length,
+            )
+        return normalized
+
+    def _normalize_metadata_value(
+        self,
+        value: Any,
+        *,
+        max_string_length: int | None = None,
+    ) -> Any:
+        if value is None or isinstance(value, (bool, int, float)):
+            return value
+
+        if isinstance(value, str):
+            if max_string_length is not None and len(value) > max_string_length:
+                raise GraphRAGValidationError(
+                    f"metadata string values must be <= {max_string_length} characters."
+                )
+            return value
+
+        if isinstance(value, dict):
+            return self._normalize_metadata(
+                value,
+                max_items=None,
+                max_string_length=max_string_length,
+            )
+
+        if isinstance(value, list):
+            return [
+                self._normalize_metadata_value(
+                    item,
+                    max_string_length=max_string_length,
+                )
+                for item in value
+            ]
+
+        raise GraphRAGValidationError(
+            "metadata values must be JSON-serializable scalar, object, or array types."
+        )
 
     def _elapsed_ms(self, started: float) -> float:
         return round((time.perf_counter() - started) * 1000.0, 2)

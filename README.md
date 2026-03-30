@@ -19,6 +19,8 @@ The current implementation targets a local Docker Compose workflow with:
 
 The repository also includes CI validation for clean-checkout test execution with Python 3.12 and `uv`.
 
+It now also includes explicit operational scripts for schema application and graph bootstrap / rebuild flows.
+
 ## Repository layout
 
 - `docker/`
@@ -32,6 +34,7 @@ The repository also includes CI validation for clean-checkout test execution wit
 - `docs/`
 - `schemas/`
 - `scripts/`
+  - schema and graph operation scripts
 - `src/`
   - `pggraphrag_mcp/`
 - `tests/`
@@ -77,6 +80,11 @@ The repository also includes CI validation for clean-checkout test execution wit
 - unauthenticated request must fail
 - authenticated health check must pass
 - authenticated minimal tool invocation must pass
+
+### Explicit operations
+- schema application can be run explicitly
+- graph bootstrap and rebuild can be run explicitly
+- these operations are repeatable and intended for operator use
 
 ## Prerequisites
 
@@ -185,6 +193,35 @@ If everything is healthy, the script exits successfully and prints a JSON summar
 ### Smoke
 
 - `make smoke`
+
+### Explicit schema and graph operations
+
+Use the explicit scripts under `scripts/` for operator-driven maintenance tasks.
+
+Recommended operations:
+- schema apply
+- AGE bootstrap
+- graph refresh by document
+- full graph rebuild
+
+Concrete examples:
+
+- apply the repository-owned SQL files to a target database
+  - `uv run python scripts/apply_schema.py --database-url "postgresql://pggraphrag_app:change-me-db-password@pggraphrag-db:5432/pggraphrag" --verbose`
+
+- validate the schema apply plan without executing SQL
+  - `uv run python scripts/apply_schema.py --database-url "postgresql://pggraphrag_app:change-me-db-password@pggraphrag-db:5432/pggraphrag" --check-only`
+
+- inspect current graph projection status
+  - `PGGRAPHRAG_MCP_DATABASE_URL="postgresql://pggraphrag_app:change-me-db-password@pggraphrag-db:5432/pggraphrag" uv run python scripts/bootstrap_graph.py --status --pretty`
+
+- rebuild the full AGE graph projection
+  - `PGGRAPHRAG_MCP_DATABASE_URL="postgresql://pggraphrag_app:change-me-db-password@pggraphrag-db:5432/pggraphrag" uv run python scripts/bootstrap_graph.py --full-rebuild --pretty`
+
+- rebuild projection for one document only
+  - `PGGRAPHRAG_MCP_DATABASE_URL="postgresql://pggraphrag_app:change-me-db-password@pggraphrag-db:5432/pggraphrag" uv run python scripts/bootstrap_graph.py --document-id "<document-uuid>" --pretty`
+
+These operations should be treated as explicit maintenance flows rather than implicit side effects of unrelated commands.
 
 ### CI-equivalent local validation
 
@@ -312,8 +349,12 @@ The local stack is considered healthy when these conditions are met.
 - `graph_status` responds
 
 ### Operations
+- schema application is available through an explicit script
+- graph bootstrap is available through an explicit script
+- graph rebuild is repeatable
 - the smoke script passes
 - structured logs are emitted
+- the README documents concrete schema-apply and graph-bootstrap commands
 
 ## Structured log fields
 
@@ -398,6 +439,19 @@ If the persisted volume contains an incompatible old state, rebuild from scratch
 - `docker volume rm pggraphrag_db_data`
 - `make compose-up`
 
+### Schema and graph operation issues
+If relational schema or graph projection state becomes inconsistent:
+
+- run the explicit schema-apply script
+  - `uv run python scripts/apply_schema.py --database-url "postgresql://pggraphrag_app:change-me-db-password@pggraphrag-db:5432/pggraphrag" --verbose`
+- inspect graph status
+  - `PGGRAPHRAG_MCP_DATABASE_URL="postgresql://pggraphrag_app:change-me-db-password@pggraphrag-db:5432/pggraphrag" uv run python scripts/bootstrap_graph.py --status --pretty`
+- run the explicit graph bootstrap or rebuild script
+  - `PGGRAPHRAG_MCP_DATABASE_URL="postgresql://pggraphrag_app:change-me-db-password@pggraphrag-db:5432/pggraphrag" uv run python scripts/bootstrap_graph.py --full-rebuild --pretty`
+- if only one document needs repair, refresh that document instead
+  - `PGGRAPHRAG_MCP_DATABASE_URL="postgresql://pggraphrag_app:change-me-db-password@pggraphrag-db:5432/pggraphrag" uv run python scripts/bootstrap_graph.py --document-id "<document-uuid>" --pretty`
+- re-run the smoke test after maintenance completes
+
 ## Release readiness checklist
 
 Use this checklist before tagging `v0.1.0`.
@@ -409,6 +463,9 @@ Use this checklist before tagging `v0.1.0`.
 - verify all services become healthy
 - run the smoke test successfully against `https://localhost:9443/mcp`
 - verify the same clean-environment path also works after recreating the database volume
+- verify explicit maintenance commands work in the same environment:
+  - `uv run python scripts/apply_schema.py --database-url "postgresql://pggraphrag_app:change-me-db-password@pggraphrag-db:5432/pggraphrag" --check-only`
+  - `PGGRAPHRAG_MCP_DATABASE_URL="postgresql://pggraphrag_app:change-me-db-password@pggraphrag-db:5432/pggraphrag" uv run python scripts/bootstrap_graph.py --status --pretty`
 
 ### Verification
 - run `python -m compileall src scripts tests`
@@ -419,6 +476,9 @@ Use this checklist before tagging `v0.1.0`.
 - verify `retrieve_hybrid`
 - verify `source_trace`
 - verify AGE projection counts are non-zero after ingest
+- verify schema application can be executed explicitly
+- verify graph bootstrap can be executed explicitly
+- verify graph rebuild remains repeatable after explicit maintenance
 - verify the current suite includes hardening / release-readiness coverage in addition to HTTP and GraphRAG flow coverage
 - verify embedding configuration behaves as expected in both cases:
   - with `OPENAI_API_KEY` present
@@ -468,6 +528,7 @@ Freeze these tool names for `v0.1.0`:
 - verify database URLs remain redacted in logs
 - verify private app and database are not directly exposed on the host
 - verify only the proxy publishes the external HTTPS port
+- verify schema apply and graph bootstrap / rebuild procedures are documented and executable as explicit operator actions
 
 ### Packaging and repository hygiene
 - remove local artifacts such as `.DS_Store`
