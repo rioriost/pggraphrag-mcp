@@ -27,6 +27,26 @@ The default local setup gives you:
 - a generated local bearer token for MCP access
 - a generated local `.env` file and local TLS files on first run
 
+### Current completion status
+
+`pggraphrag-mcp` is now functioning as a GraphRAG-oriented remote MCP server.
+
+Validated capabilities include:
+
+- AI agent registration over HTTPS
+- live MCP tool discovery
+- `document_ingest`
+- `retrieve_naive`
+- `retrieve_local_graph`
+- `retrieve_hybrid`
+- `entity_search`
+- `source_trace`
+
+This means the core GraphRAG flow is working end to end:
+- ingest documents into PostgreSQL-backed canonical storage
+- derive graph context through Apache AGE
+- retrieve supporting chunks, entities, relationships, and sources over MCP
+
 Available MCP tools include:
 
 - `health_check`
