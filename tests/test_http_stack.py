@@ -339,7 +339,6 @@ def test_http_mcp_get_returns_tool_listing(
     assert "document_reingest" in payload["result"]["tools"]
     assert "document_delete" in payload["result"]["tools"]
     assert "graph_refresh" in payload["result"]["tools"]
-    assert "rebuild_embeddings" in payload["result"]["tools"]
     assert "retrieve_naive" in payload["result"]["tools"]
     assert "entity_search" in payload["result"]["tools"]
     assert "entity_expand" in payload["result"]["tools"]
@@ -373,7 +372,6 @@ def test_http_mcp_get_returns_tool_listing(
             "document_delete",
         ),
         ("graph_refresh", {"full_rebuild": False}, "workflow", "graph_refresh"),
-        ("rebuild_embeddings", {}, "workflow", "rebuild_embeddings"),
         ("retrieve_naive", {"query": "Alpha Beta"}, "workflow", "retrieve_naive"),
         ("entity_search", {"query": "Alpha"}, "workflow", "entity_search"),
         (

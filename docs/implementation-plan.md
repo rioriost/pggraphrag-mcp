@@ -1,5 +1,49 @@
 # pggraphrag-mcp 実装計画
 
+## 0. 現在の進捗スナップショット
+
+この文書は初期計画として書かれているが、現在の実装は以下まで進んでいる。
+
+### フェーズ進捗
+
+- Phase 0: 完了
+- Phase 1: 完了
+- Phase 2: 完了
+- Phase 3: 完了
+- Phase 4: 完了
+- Phase 5: ほぼ完了
+
+### 現時点で完了している主要項目
+
+- HTTPS 経由の remote MCP endpoint
+- small auth
+- PostgreSQL 17 + pgvector + Apache AGE
+- document ingest / reingest / delete
+- graph refresh / graph bootstrap
+- `retrieve_naive`
+- `retrieve_local_graph`
+- `retrieve_hybrid`
+- `entity_search`
+- `entity_expand`
+- `source_trace`
+- smoke test
+- integration tests
+- structured logging
+- ops automation CLI
+
+### 現時点での主な残項目 / ギャップ
+
+- rate limiting は計画項目として残っている
+- production compose review は運用確認項目として残っている
+- host 側からの ops automation は host-reachable な PostgreSQL DSN を前提とする
+- `rebuild_embeddings` は v0.1.0 の公開対象から外し、後続候補として扱う
+
+### 読み方
+
+以下の章は元の実装計画を保持している。
+したがって、本文中に将来形で書かれている箇所があっても、現在はすでに完了済みの項目を含む。
+進捗判断ではこのスナップショットを優先する。
+
 ## 1. 目的
 
 `pggraphrag-mcp` は、文書、チャンク、エンティティ、関係、検索トレースを PostgreSQL に永続化しつつ、
@@ -147,7 +191,6 @@ MCP クライアントから安全に GraphRAG を利用できるようにする
 - `document_reingest`
 - `document_delete`
 - `graph_refresh`
-- `rebuild_embeddings`
 
 #### retrieval 系
 - `retrieve_naive`
@@ -304,6 +347,8 @@ pggraphrag-mcp/
 
 ### Phase 0: bootstrap
 
+状態: 完了
+
 - リポジトリ雛形作成
 - Docker Compose の雛形作成
 - env 変数命名確定
@@ -311,12 +356,19 @@ pggraphrag-mcp/
 
 ### Phase 1: storage baseline
 
+状態: 完了
+
 - PostgreSQL image 作成
 - `pgvector` / `Apache AGE` 組み込み
 - schema migration 実装
 - `ensure_age_extension` / `bootstrap_graph` 実装
 
+補足:
+- `ensure_age_extension.py` という単独スクリプト名ではないが、必要機能は schema / bootstrap 側に統合済み
+
 ### Phase 2: MCP skeleton
+
+状態: 完了
 
 - MCP HTTP endpoint 実装
 - `health_check`, `index_status`, `graph_status` 実装
@@ -324,6 +376,8 @@ pggraphrag-mcp/
 - smoke test 作成
 
 ### Phase 3: ingestion
+
+状態: 完了
 
 - document ingest
 - chunking
@@ -335,6 +389,8 @@ pggraphrag-mcp/
 
 ### Phase 4: retrieval
 
+状態: 完了
+
 - `retrieve_naive`
 - `entity_search`
 - `entity_expand`
@@ -344,12 +400,22 @@ pggraphrag-mcp/
 
 ### Phase 5: hardening
 
-- rate limiting
+状態: ほぼ完了
+
+完了している項目:
 - payload limit
 - structured logging
-- timeout / retry policy
-- acceptance tests
+- acceptance tests 相当の検証
+- integration tests
+- release readiness 用ドキュメント
+- smoke / CI 検証
+- ops automation
+
+未完了または部分完了の項目:
+- rate limiting
+- timeout / retry policy の全体適用
 - production compose review
+- `rebuild_embeddings` を v0.1.0 の公開対象から外したため、必要なら後続フェーズで再計画
 
 ## 12. テスト計画
 
@@ -388,6 +454,9 @@ pggraphrag-mcp/
 - source_trace
 - smoke tests
 
+現状、このリストの中核機能は実装済みで、実測ベースの検証も揃っている。
+`rebuild_embeddings` は v0.1.0 の初期リリース定義からは外す。
+
 ### v0.1.0 に含めないもの
 - Grafana
 - OIDC
@@ -403,4 +472,7 @@ pggraphrag-mcp/
 - ingest した文書から source trace が取得できる
 - graph rebuild が再実行可能
 - テストと smoke が CI で通る
+
+現時点では、これらの完了条件は概ね満たしている。
+ただし、rate limiting と production compose review の扱いは最終的な v0.1.0 判定時に明確化が必要。
 

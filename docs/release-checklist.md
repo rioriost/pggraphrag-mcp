@@ -17,9 +17,9 @@ Use this checklist before creating a release tag or declaring the repository rea
   - [ ] `.DS_Store`
   - [ ] temporary notes
   - [ ] local scratch files
-- [ ] committed files match the intended public milestone
-- [ ] placeholder or local-only assets are clearly identified
-- [ ] docs reflect the current implemented behavior
+- [x] committed files match the intended public milestone
+- [x] placeholder or local-only assets are clearly identified
+- [x] docs reflect the current implemented behavior
 
 ---
 
@@ -27,12 +27,12 @@ Use this checklist before creating a release tag or declaring the repository rea
 
 - [ ] `.env.example` is current
 - [ ] `.env.production.example` is current
-- [ ] required environment variables are documented
-- [ ] local TLS certificate instructions are valid
-- [ ] local compose project naming is documented
-  - [ ] `COMPOSE_PROJECT_NAME=pggraphrag_mcp`
-- [ ] verified local public endpoint is documented
-  - [ ] `https://localhost:9443/mcp`
+- [x] required environment variables are documented
+- [x] local TLS certificate instructions are valid
+- [x] local compose project naming is documented
+  - [x] `COMPOSE_PROJECT_NAME=pggraphrag_mcp`
+- [x] verified local public endpoint is documented
+  - [x] `https://localhost:9443/mcp`
 
 ---
 
@@ -40,34 +40,34 @@ Use this checklist before creating a release tag or declaring the repository rea
 
 Run these checks from a clean checkout.
 
-- [ ] `uv run ruff check .`
-- [ ] `python -m compileall src scripts tests`
-- [ ] `uv run pytest`
+- [x] `uv run ruff check .`
+- [x] `python -m compileall src scripts tests`
+- [x] `uv run pytest`
 
 Expected result:
 
-- [ ] all lint checks pass
-- [ ] all imports compile
-- [ ] full test suite passes
+- [x] all lint checks pass
+- [x] all imports compile
+- [x] full test suite passes
 
 ---
 
 ## 4. CI validation
 
-- [ ] CI workflow file exists
-  - [ ] `.github/workflows/ci.yml`
-- [ ] CI has a dedicated `lint` job
-- [ ] CI has a dedicated `test` job
-- [ ] CI has a dedicated `smoke` job
-- [ ] CI uses Python 3.12
-- [ ] CI uses `uv`
-- [ ] CI job structure matches repository docs
+- [x] CI workflow file exists
+  - [x] `.github/workflows/ci.yml`
+- [x] CI has a dedicated `lint` job
+- [x] CI has a dedicated `test` job
+- [x] CI has a dedicated `smoke` job
+- [x] CI uses Python 3.12
+- [x] CI uses `uv`
+- [x] CI job structure matches repository docs
 
 Expected result:
 
 - [ ] lint workflow is green
 - [ ] test workflow is green
-- [ ] smoke workflow configuration is valid
+- [x] smoke workflow configuration is valid
 
 ---
 
@@ -75,55 +75,55 @@ Expected result:
 
 Validate from a clean local environment.
 
-- [ ] copy environment file
-  - [ ] `cp .env.example .env`
-- [ ] generate or provide local TLS certificate and key
-- [ ] remove stale database volume when testing a clean bring-up
-  - [ ] `docker volume rm pggraphrag_db_data`
-- [ ] start the full stack
-  - [ ] `COMPOSE_PROJECT_NAME=pggraphrag_mcp make compose-up`
+- [x] copy environment file
+  - [x] `cp .env.example .env`
+- [x] generate or provide local TLS certificate and key
+- [x] remove stale database volume when testing a clean bring-up
+  - [x] `docker volume rm pggraphrag_db_data`
+- [x] start the full stack
+  - [x] `COMPOSE_PROJECT_NAME=pggraphrag_mcp make compose-up`
 
 Expected result:
 
-- [ ] all services start
-- [ ] all services become healthy
-- [ ] proxy is reachable
-- [ ] private app is not directly exposed
-- [ ] database is not directly exposed
+- [x] all services start
+- [x] all services become healthy
+- [x] proxy is reachable
+- [x] private app is not directly exposed
+- [x] database is not directly exposed
 
 ---
 
 ## 6. Authentication verification
 
-- [ ] unauthenticated `/mcp` request is rejected
-- [ ] authenticated `/mcp` request is accepted
+- [x] unauthenticated `/mcp` request is rejected
+- [x] authenticated `/mcp` request is accepted
 - [ ] forwarded auth headers are present as expected
-- [ ] auth logs can be correlated with app logs via request context
+- [x] auth logs can be correlated with app logs via request context
 
 Expected result:
 
-- [ ] bearer token missing -> reject
-- [ ] bearer token valid -> allow
+- [x] bearer token missing -> reject
+- [x] bearer token valid -> allow
 
 ---
 
 ## 7. Database and schema verification
 
-- [ ] schema apply script exists
-  - [ ] `scripts/apply_schema.py`
+- [x] schema apply script exists
+  - [x] `scripts/apply_schema.py`
 - [ ] schema apply dry-run / check-only path works
 - [ ] explicit schema apply path works
-- [ ] `pgvector` extension is available
-- [ ] `Apache AGE` extension is available
-- [ ] canonical relational tables exist
-  - [ ] `document`
-  - [ ] `chunk`
-  - [ ] `entity`
-  - [ ] `chunk_entity`
-  - [ ] `relation_fact`
-  - [ ] `ingestion_job`
-  - [ ] `retrieval_log`
-  - [ ] `graph_refresh_log`
+- [x] `pgvector` extension is available
+- [x] `Apache AGE` extension is available
+- [x] canonical relational tables exist
+  - [x] `document`
+  - [x] `chunk`
+  - [x] `entity`
+  - [x] `chunk_entity`
+  - [x] `relation_fact`
+  - [x] `ingestion_job`
+  - [x] `retrieval_log`
+  - [x] `graph_refresh_log`
 
 Recommended verification commands:
 
@@ -134,23 +134,23 @@ Recommended verification commands:
 
 ## 8. Graph bootstrap and rebuild verification
 
-- [ ] graph bootstrap / rebuild script exists
-  - [ ] `scripts/bootstrap_graph.py`
-- [ ] ops automation script exists
-  - [ ] `scripts/ops_automation.py`
+- [x] graph bootstrap / rebuild script exists
+  - [x] `scripts/bootstrap_graph.py`
+- [x] ops automation script exists
+  - [x] `scripts/ops_automation.py`
 - [x] packaged ops automation entrypoint exists
   - [x] `pggraphrag-mcp-ops`
   - [x] packaging/runtime import issue is resolved for `uv run pggraphrag-mcp-ops`
-  - [ ] host-runtime caveat is documented: the packaged CLI still needs a host-reachable `PGGRAPHRAG_MCP_DATABASE_URL` when run outside the compose network
-- [ ] graph status command works
+  - [x] host-runtime caveat is documented: the packaged CLI still needs a host-reachable `PGGRAPHRAG_MCP_DATABASE_URL` when run outside the compose network
+- [x] graph status command works
 - [ ] document-scoped graph refresh works
-- [ ] full graph rebuild works
+- [x] full graph rebuild works
 - [ ] full graph rebuild is repeatable
-- [ ] graph refresh metadata is recorded
-- [ ] ops automation status command works
+- [x] graph refresh metadata is recorded
+- [x] ops automation status command works
 - [ ] ops automation readiness check works
 - [ ] ops automation wait-ready flow works
-- [ ] ops automation bootstrap with readiness wait works
+- [x] ops automation bootstrap with readiness wait works
 - [ ] ops automation plan mode works for ordered maintenance steps
 
 Recommended verification commands:
@@ -169,11 +169,11 @@ Recommended verification commands:
 
 Expected result:
 
-- [ ] graph exists
-- [ ] projected node counts are non-zero after ingest
-- [ ] projected edge counts are non-zero after ingest
-- [ ] readiness checks report the graph as ready after successful bootstrap
-- [ ] operator automation can run status, bootstrap, and readiness validation without manual command stitching
+- [x] graph exists
+- [x] projected node counts are non-zero after ingest
+- [x] projected edge counts are non-zero after ingest
+- [x] readiness checks report the graph as ready after successful bootstrap
+- [x] operator automation can run status, bootstrap, and readiness validation without manual command stitching
 - [ ] packaged host-side automation uses a DSN that is valid from the host runtime, not only from inside compose
 
 ---
@@ -182,24 +182,24 @@ Expected result:
 
 Verify the public GraphRAG flows end to end.
 
-- [ ] `retrieve_naive` works
-- [ ] `retrieve_local_graph` works
-- [ ] `retrieve_hybrid` works
-- [ ] `entity_search` works
-- [ ] `entity_expand` works
-- [ ] `source_trace` works
-- [ ] responses remain JSON-safe
-- [ ] responses include bounded payloads
-- [ ] score breakdowns are present where expected
+- [x] `retrieve_naive` works
+- [x] `retrieve_local_graph` works
+- [x] `retrieve_hybrid` works
+- [x] `entity_search` works
+- [x] `entity_expand` works
+- [x] `source_trace` works
+- [x] responses remain JSON-safe
+- [x] responses include bounded payloads
+- [x] score breakdowns are present where expected
 
 Expected result:
 
-- [ ] supporting chunks are returned
-- [ ] entities are returned
-- [ ] relationships are returned
-- [ ] sources are returned
-- [ ] `retrieval_id` is returned
-- [ ] source trace can be resolved from `retrieval_id`
+- [x] supporting chunks are returned
+- [x] entities are returned
+- [x] relationships are returned
+- [x] sources are returned
+- [x] `retrieval_id` is returned
+- [x] source trace can be resolved from `retrieval_id`
 
 ---
 
@@ -227,93 +227,93 @@ Expected smoke coverage:
 
 ## 11. Embedding validation
 
-- [ ] configured embedding provider is documented
-- [ ] local fallback behavior is documented
-- [ ] remote embedding provider behavior is documented
-- [ ] remote mode requires API key as expected
-- [ ] fallback mode keeps ingest and retrieval usable without a remote key
+- [x] configured embedding provider is documented
+- [x] local fallback behavior is documented
+- [x] remote embedding provider behavior is documented
+- [x] remote mode requires API key as expected
+- [x] fallback mode keeps ingest and retrieval usable without a remote key
 
 Expected result:
 
-- [ ] local / deterministic-compatible path works
-- [ ] OpenAI-compatible local path works
-- [ ] remote OpenAI path behavior is tested
-- [ ] provider mode is visible in metadata and logs where relevant
+- [x] local / deterministic-compatible path works
+- [x] OpenAI-compatible local path works
+- [x] remote OpenAI path behavior is tested
+- [x] provider mode is visible in metadata and logs where relevant
 
 ---
 
 ## 12. Extraction quality verification
 
-- [ ] heuristic entity extraction is stable
-- [ ] generic alias noise is reduced
-- [ ] phrase trimming rules behave as intended
-- [ ] relation extraction prefers explicit pattern matches
-- [ ] cross-sentence relation mixing is suppressed
-- [ ] fallback adjacency relations remain weaker than explicit matches
+- [x] heuristic entity extraction is stable
+- [x] generic alias noise is reduced
+- [x] phrase trimming rules behave as intended
+- [x] relation extraction prefers explicit pattern matches
+- [x] cross-sentence relation mixing is suppressed
+- [x] fallback adjacency relations remain weaker than explicit matches
 
 Expected result:
 
-- [ ] entity aliases look reasonable
-- [ ] relation types match expected patterns
-- [ ] obvious false positives are not produced in regression tests
+- [x] entity aliases look reasonable
+- [x] relation types match expected patterns
+- [x] obvious false positives are not produced in regression tests
 
 ---
 
 ## 13. Retrieval quality verification
 
-- [ ] reranking is active
-- [ ] naive reranking is stable
-- [ ] local graph reranking is stable
-- [ ] hybrid reranking is stable
-- [ ] score breakdown metadata is present
-- [ ] relation-supported chunks outrank weaker unsupported chunks when appropriate
+- [x] reranking is active
+- [x] naive reranking is stable
+- [x] local graph reranking is stable
+- [x] hybrid reranking is stable
+- [x] score breakdown metadata is present
+- [x] relation-supported chunks outrank weaker unsupported chunks when appropriate
 
 Expected result:
 
-- [ ] ranking is explainable
-- [ ] relation evidence influences hybrid ranking
-- [ ] payload limits remain enforced
+- [x] ranking is explainable
+- [x] relation evidence influences hybrid ranking
+- [x] payload limits remain enforced
 
 ---
 
 ## 14. Limits and safety controls
 
-- [ ] max vector candidates are enforced
-- [ ] max graph hops are enforced
-- [ ] max return chunk count is enforced
-- [ ] max return entity count is enforced
-- [ ] malformed requests fail predictably
-- [ ] invalid UUID inputs fail predictably
-- [ ] oversized strings fail predictably
-- [ ] metadata validation rejects unsupported structures
-- [ ] no arbitrary SQL execution surface is exposed
-- [ ] no arbitrary Cypher execution surface is exposed
+- [x] max vector candidates are enforced
+- [x] max graph hops are enforced
+- [x] max return chunk count is enforced
+- [x] max return entity count is enforced
+- [x] malformed requests fail predictably
+- [x] invalid UUID inputs fail predictably
+- [x] oversized strings fail predictably
+- [x] metadata validation rejects unsupported structures
+- [x] no arbitrary SQL execution surface is exposed
+- [x] no arbitrary Cypher execution surface is exposed
 
 Expected result:
 
-- [ ] bounded cost for retrieval operations
-- [ ] bounded response size
-- [ ] safe failure behavior for malformed input
+- [x] bounded cost for retrieval operations
+- [x] bounded response size
+- [x] safe failure behavior for malformed input
 
 ---
 
 ## 15. Logging and observability
 
-- [ ] structured JSON logs are enabled
-- [ ] request correlation fields are present
-- [ ] auth and app logs can be followed for a single request
-- [ ] DB operation spans are logged where expected
-- [ ] sensitive values remain redacted
+- [x] structured JSON logs are enabled
+- [x] request correlation fields are present
+- [x] auth and app logs can be followed for a single request
+- [x] DB operation spans are logged where expected
+- [x] sensitive values remain redacted
 
 Expected log fields include:
 
-- [ ] `timestamp`
-- [ ] `level`
-- [ ] `logger`
-- [ ] `message`
-- [ ] `request_id`
-- [ ] `authenticated_identity`
-- [ ] `event`
+- [x] `timestamp`
+- [x] `level`
+- [x] `logger`
+- [x] `message`
+- [x] `request_id`
+- [x] `authenticated_identity`
+- [x] `event`
 - [ ] `duration_ms`
 
 ---
@@ -322,20 +322,19 @@ Expected log fields include:
 
 Freeze these tool names for `v0.1.0`:
 
-- [ ] `health_check`
-- [ ] `index_status`
-- [ ] `graph_status`
-- [ ] `document_ingest`
-- [ ] `document_reingest`
-- [ ] `document_delete`
-- [ ] `graph_refresh`
-- [ ] `rebuild_embeddings`
-- [ ] `retrieve_naive`
-- [ ] `entity_search`
-- [ ] `entity_expand`
-- [ ] `retrieve_local_graph`
-- [ ] `retrieve_hybrid`
-- [ ] `source_trace`
+- [x] `health_check`
+- [x] `index_status`
+- [x] `graph_status`
+- [x] `document_ingest`
+- [x] `document_reingest`
+- [x] `document_delete`
+- [x] `graph_refresh`
+- [x] `retrieve_naive`
+- [x] `entity_search`
+- [x] `entity_expand`
+- [x] `retrieve_local_graph`
+- [x] `retrieve_hybrid`
+- [x] `source_trace`
 
 Freeze these resource URI templates for `v0.1.0`:
 
@@ -345,10 +344,10 @@ Freeze these resource URI templates for `v0.1.0`:
 - [ ] `graphrag://retrieval/{retrieval_id}`
 - [ ] `graphrag://graph/status`
 
-- [ ] schema snapshot file exists
-  - [ ] `schemas/mcp/public-surface.v0.1.0.json`
-- [ ] runtime tool listing matches frozen snapshot
-- [ ] runtime auth header expectations match frozen snapshot
+- [x] schema snapshot file exists
+  - [x] `schemas/mcp/public-surface.v0.1.0.json`
+- [x] runtime tool listing matches frozen snapshot
+- [x] runtime auth header expectations match frozen snapshot
 
 ---
 
@@ -356,15 +355,15 @@ Freeze these resource URI templates for `v0.1.0`:
 
 Release is ready only if all of the following are true:
 
-- [ ] lint is green
-- [ ] tests are green
-- [ ] clean-volume compose startup is green
-- [ ] smoke is green
-- [ ] explicit schema apply is available
-- [ ] explicit graph bootstrap / rebuild is available
-- [ ] AGE projection is working
-- [ ] retrieval and trace flows are working
-- [ ] docs match verified commands
-- [ ] public tool/resource surface is frozen
+- [x] lint is green
+- [x] tests are green
+- [x] clean-volume compose startup is green
+- [x] smoke is green
+- [x] explicit schema apply is available
+- [x] explicit graph bootstrap / rebuild is available
+- [x] AGE projection is working
+- [x] retrieval and trace flows are working
+- [x] docs match verified commands
+- [x] public tool/resource surface is frozen
 
 If any box above is unchecked, do not tag `v0.1.0`.

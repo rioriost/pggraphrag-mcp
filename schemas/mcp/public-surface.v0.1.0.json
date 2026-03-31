@@ -50,11 +50,6 @@
       "status": "frozen"
     },
     {
-      "name": "rebuild_embeddings",
-      "category": "ops",
-      "status": "frozen"
-    },
-    {
       "name": "retrieve_naive",
       "category": "retrieval",
       "status": "frozen"

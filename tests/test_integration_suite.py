@@ -248,7 +248,6 @@ def test_public_tool_surface_freeze_is_documented() -> None:
         "document_reingest",
         "document_delete",
         "graph_refresh",
-        "rebuild_embeddings",
         "retrieve_naive",
         "entity_search",
         "entity_expand",

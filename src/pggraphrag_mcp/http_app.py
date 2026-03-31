@@ -251,13 +251,6 @@ async def invoke_tool(
             )
         )
 
-    if tool_name == "rebuild_embeddings":
-        return {
-            "status": "not_implemented",
-            "workflow": "rebuild_embeddings",
-            "message": "Embedding rebuild is not implemented yet.",
-        }
-
     if tool_name == "retrieve_naive":
         return graphrag.retrieve_naive(
             RetrievalCommand(
@@ -473,7 +466,6 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                     "document_reingest",
                     "document_delete",
                     "graph_refresh",
-                    "rebuild_embeddings",
                     "retrieve_naive",
                     "entity_search",
                     "entity_expand",

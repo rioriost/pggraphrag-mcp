@@ -19,6 +19,7 @@ project:
 phases:
   - id: phase-0
     name: Bootstrap repository and container skeleton
+    status: completed
     goal: Establish repo structure and ctxledger-like compose topology without Grafana
     deliverables:
       - repository layout
@@ -32,6 +33,7 @@ phases:
       - T003
   - id: phase-1
     name: Storage baseline
+    status: completed
     goal: Provide PostgreSQL 17 image with pgvector and Apache AGE plus migration/bootstrap scripts
     deliverables:
       - postgres-age image
@@ -46,6 +48,7 @@ phases:
       - T006
   - id: phase-2
     name: MCP skeleton
+    status: completed
     goal: Expose HTTPS-authenticated MCP endpoint and foundational tools/resources
     deliverables:
       - http app
@@ -60,6 +63,7 @@ phases:
       - T009
   - id: phase-3
     name: Ingestion pipeline
+    status: completed
     goal: Ingest documents into canonical storage and derived graph/vector layers
     deliverables:
       - document ingest tool
@@ -76,6 +80,7 @@ phases:
       - T013
   - id: phase-4
     name: Retrieval implementation
+    status: completed
     goal: Deliver naive, local graph, and hybrid retrieval with source trace
     deliverables:
       - retrieve_naive
@@ -93,6 +98,11 @@ phases:
       - T017
   - id: phase-5
     name: Hardening and release
+    status: mostly_completed
+    remaining_gaps:
+      - rate limiting remains a planned hardening item
+      - production compose review remains an operational sign-off item
+      - rebuild_embeddings was removed from the v0.1.0 scope and should be reconsidered in a later phase if needed
     goal: Add limits, logs, tests, and release readiness
     deliverables:
       - payload and hop limits

@@ -281,7 +281,6 @@ def test_public_surface_snapshot_contains_expected_frozen_tools() -> None:
         "document_reingest",
         "document_delete",
         "graph_refresh",
-        "rebuild_embeddings",
         "retrieve_naive",
         "entity_search",
         "entity_expand",
