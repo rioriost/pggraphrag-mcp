@@ -316,6 +316,7 @@ def test_http_requires_authenticated_identity_header(
     assert response.status_code == 401
     payload = response.json()
     assert payload["jsonrpc"] == "2.0"
+    assert "id" not in payload
     assert payload["error"]["code"] == -32001
 
 
@@ -427,7 +428,7 @@ def test_http_supported_tools_return_jsonrpc_results(
         assert payload["result"][result_key] == expected_value
 
 
-def test_http_returns_method_not_found_for_unsupported_method(
+def test_http_returns_tools_list_for_streamable_mcp_method(
     http_client: tuple[TestClient, DummyDatabase, DummyGraphRAGService],
 ) -> None:
     client, _database, _graphrag = http_client
@@ -443,9 +444,15 @@ def test_http_returns_method_not_found_for_unsupported_method(
         },
     )
 
-    assert response.status_code == 404
+    assert response.status_code == 200
     payload = response.json()
-    assert payload["error"]["code"] == -32601
+    assert payload["jsonrpc"] == "2.0"
+    assert payload["id"] == "bad-method"
+    assert "tools" in payload["result"]
+    assert isinstance(payload["result"]["tools"], list)
+    tool_names = {tool["name"] for tool in payload["result"]["tools"]}
+    assert "health_check" in tool_names
+    assert "retrieve_hybrid" in tool_names
 
 
 def test_http_returns_not_found_for_unsupported_tool(
@@ -467,7 +474,7 @@ def test_http_returns_not_found_for_unsupported_tool(
         },
     )
 
-    assert response.status_code == 404
+    assert response.status_code == 200
     payload = response.json()
     assert payload["error"]["code"] == -32601
     assert "Unsupported tool" in payload["error"]["message"]

@@ -33,6 +33,12 @@ Use this checklist before creating a release tag or declaring the repository rea
   - [x] `COMPOSE_PROJECT_NAME=pggraphrag_mcp`
 - [x] verified local public endpoint is documented
   - [x] `https://localhost:9443/mcp`
+- [x] local auto-prepare behavior is documented
+  - [x] `make compose-up` can create `.env` from `.env.example` when missing
+  - [x] `make compose-up` prompts for `OPENAI_API_KEY` by default during local env bootstrap
+  - [x] `make compose-up` can generate local self-signed TLS assets when missing
+  - [x] `make compose-up` can auto-select a free local proxy port, preferring `9443`
+  - [x] `make compose-up` can generate a random local bearer token for `PGGRAPHRAG_MCP_SMALL_AUTH_TOKEN`
 
 ---
 
@@ -75,6 +81,12 @@ Expected result:
 
 Validate from a clean local environment.
 
+- [x] local bootstrap path can self-prepare common prerequisites
+  - [x] missing `.env` can be created automatically from `.env.example`
+  - [x] `OPENAI_API_KEY` is captured by default during first-time local bootstrap unless explicitly provided up front
+  - [x] missing development TLS certificate and key can be created automatically
+  - [x] a free local proxy port can be selected automatically during first-time bootstrap
+  - [x] a random local bearer token can be generated automatically during first-time bootstrap
 - [x] copy environment file
   - [x] `cp .env.example .env`
 - [x] generate or provide local TLS certificate and key
@@ -90,6 +102,10 @@ Expected result:
 - [x] proxy is reachable
 - [x] private app is not directly exposed
 - [x] database is not directly exposed
+- [x] a first local bring-up does not require manual certificate creation before `make compose-up`
+- [x] a first local bring-up collects the required `OPENAI_API_KEY` interactively during bootstrap by default
+- [x] a first local bring-up can avoid a busy default HTTPS port by choosing another free local proxy port when needed
+- [x] a first local bring-up can print a directly usable MCP registration example backed by a generated local bearer token
 
 ---
 
@@ -364,6 +380,7 @@ Release is ready only if all of the following are true:
 - [x] AGE projection is working
 - [x] retrieval and trace flows are working
 - [x] docs match verified commands
+- [x] local `make compose-up` bootstrap behavior matches documented operator expectations
 - [x] public tool/resource surface is frozen
 
 If any box above is unchecked, do not tag `v0.1.0`.

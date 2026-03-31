@@ -1,9 +1,14 @@
+tls:
+  certificates:
+    - certFile: /certs/dev.crt
+      keyFile: /certs/dev.key
+
 http:
   routers:
     mcp-router:
       entryPoints:
         - websecure
-      rule: "PathPrefix(`/mcp`)"
+      rule: "Host(`localhost`) && PathPrefix(`/mcp`)"
       service: mcp-service
       middlewares:
         - mcp-auth
@@ -12,7 +17,7 @@ http:
     ready-router:
       entryPoints:
         - websecure
-      rule: "Path(`/readyz`)"
+      rule: "Host(`localhost`) && Path(`/readyz`)"
       service: mcp-service
       middlewares:
         - mcp-auth
@@ -21,7 +26,7 @@ http:
     root-router:
       entryPoints:
         - websecure
-      rule: "Path(`/`)"
+      rule: "Host(`localhost`) && Path(`/`)"
       service: mcp-service
       middlewares:
         - mcp-auth

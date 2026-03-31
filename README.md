@@ -103,7 +103,53 @@ You also need a local TLS certificate pair for Traefik.
 
 ## Quick start
 
-### 1. Copy the environment file
+### 1. Build and start the stack
+
+Run:
+
+`COMPOSE_PROJECT_NAME=pggraphrag_mcp make compose-up`
+
+This is the default first-run bootstrap path.
+
+The `compose-up` target prepares the common local prerequisites automatically when they are missing:
+
+- creates `.env` from `.env.example`
+- appends common local defaults if required settings are missing
+- prompts for `OPENAI_API_KEY`
+- creates self-signed development TLS files under `docker/traefik/certs`
+
+The generated local defaults are intended for local development only.
+
+If you want to override them, edit `.env` after the first run.
+
+Common local defaults include:
+
+- `COMPOSE_PROJECT_NAME=pggraphrag_mcp`
+- `PGGRAPHRAG_MCP_PROXY_PORT=<auto-selected free local port, preferring 9443>`
+- `PGGRAPHRAG_MCP_SMALL_AUTH_TOKEN=<generated random local bearer token>`
+- `AUTH_SMALL_BEARER_TOKEN=<same generated local bearer token>`
+- `PGGRAPHRAG_MCP_DB_PASSWORD=<generated random local database password>`
+- `PGGRAPHRAG_MCP_DATABASE_URL=<generated PostgreSQL URL using the generated local database password>`
+
+When bootstrapping a new local `.env`, the helper prefers `9443` for `PGGRAPHRAG_MCP_PROXY_PORT`, but it can automatically fall back to another free local port if `9443` is already in use on your machine.
+
+When bootstrapping a new local `.env`, the helper also generates:
+- a random value for `PGGRAPHRAG_MCP_SMALL_AUTH_TOKEN`
+- the matching `AUTH_SMALL_BEARER_TOKEN`
+- a random local `PGGRAPHRAG_MCP_DB_PASSWORD`
+- a derived `PGGRAPHRAG_MCP_DATABASE_URL` built from the generated password and the local PostgreSQL settings
+
+On first run, you should expect this prompt:
+
+`Input OpenAI API Key:`
+
+If you prefer to avoid the interactive prompt, you can still pass the key up front:
+
+`OPENAI_API_KEY=your-key-here COMPOSE_PROJECT_NAME=pggraphrag_mcp make compose-up`
+
+If you prefer to prepare files manually, you can still copy `.env.example` yourself and generate your own certificate pair before running the stack.
+
+### 2. Optional manual environment preparation
 
 Use:
 
@@ -117,7 +163,17 @@ At minimum, verify these values:
 - `PGGRAPHRAG_MCP_DB_PASSWORD`
 - `PGGRAPHRAG_MCP_DATABASE_URL`
 
-### 2. Prepare local TLS files
+### 3. Optional non-interactive OpenAI API key preparation
+
+The default bootstrap path is interactive.
+
+If you want to avoid the prompt, set `OPENAI_API_KEY` before running `make compose-up`:
+
+`OPENAI_API_KEY=your-key-here COMPOSE_PROJECT_NAME=pggraphrag_mcp make compose-up`
+
+This value will be written into the generated local `.env`.
+
+### 4. Optional manual TLS preparation
 
 The compose stack expects certificate files that Traefik can read.
 
@@ -136,15 +192,15 @@ Example self-signed generation on macOS/Linux:
 
 If you use this approach, make sure the Traefik config and compose volume mapping point at the same files.
 
-### 3. Build and start the stack
-
-Run:
-
-`COMPOSE_PROJECT_NAME=pggraphrag_mcp make compose-up`
+### 5. Verify the running stack
 
 The verified local default public endpoint is:
 
 - `https://localhost:9443/mcp`
+
+If the local bootstrap helper had to choose a different free proxy port because `9443` was already occupied, use that generated `PGGRAPHRAG_MCP_PROXY_PORT` value from `.env` instead when constructing the MCP URL.
+
+Likewise, when registering the MCP server in an AI agent, use the generated `PGGRAPHRAG_MCP_SMALL_AUTH_TOKEN` value from `.env` for the bearer token instead of assuming any placeholder token.
 
 This starts:
 
@@ -153,13 +209,13 @@ This starts:
 - `pggraphrag-mcp-auth`
 - `pggraphrag-mcp-proxy`
 
-### 4. Inspect logs
+### 6. Inspect logs
 
 Run:
 
 `make compose-logs`
 
-### 5. Run the smoke test
+### 7. Run the smoke test
 
 Run:
 
@@ -322,6 +378,8 @@ Common local settings include:
 - `PGGRAPHRAG_MCP_DATABASE_URL`
 - `PGGRAPHRAG_MCP_AGE_GRAPH_NAME`
 
+For first-time local bootstrap, `make compose-up` can generate the local database password automatically and then write the matching `PGGRAPHRAG_MCP_DATABASE_URL` into `.env`.
+
 ### Embeddings
 - `PGGRAPHRAG_MCP_EMBEDDING_PROVIDER`
 - `PGGRAPHRAG_MCP_EMBEDDING_MODEL`
@@ -342,6 +400,12 @@ Remote embedding behavior:
 - `PGGRAPHRAG_MCP_MAX_RETURN_ENTITIES`
 
 ### Compose project naming
+- `COMPOSE_PROJECT_NAME=pggraphrag_mcp`
+
+### Local proxy port selection
+- `PGGRAPHRAG_MCP_PROXY_PORT` defaults to `9443` for local bootstrap
+- if `9443` is already in use, the local bootstrap helper can choose another free port
+- after first-time bootstrap, treat the value written into `.env` as the canonical local MCP port for that workspace
 - set `COMPOSE_PROJECT_NAME=pggraphrag_mcp` when running the small compose stack
 - this avoids collisions with other stacks that would otherwise appear under a generic `docker` project name
 - example:

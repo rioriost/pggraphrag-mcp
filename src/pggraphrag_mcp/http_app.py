@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -9,7 +10,7 @@ from typing import Any
 
 import uvicorn
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from .config import AppConfig
@@ -28,6 +29,10 @@ from .logging_utils import (
     configure_logging,
     get_logger,
     set_request_context,
+)
+from .streamable_http import (
+    StreamableHttpRequest,
+    build_streamable_http_endpoint,
 )
 
 LOGGER = get_logger(__name__)
@@ -56,6 +61,95 @@ class JsonRpcRequest(BaseModel):
     id: str | int | None = None
     method: str
     params: ToolCallParams | dict[str, Any] | None = None
+
+
+FROZEN_TOOL_NAMES = [
+    "health_check",
+    "index_status",
+    "graph_status",
+    "document_ingest",
+    "document_reingest",
+    "document_delete",
+    "graph_refresh",
+    "retrieve_naive",
+    "entity_search",
+    "entity_expand",
+    "retrieve_local_graph",
+    "retrieve_hybrid",
+    "source_trace",
+]
+
+FROZEN_RESOURCE_DEFINITIONS = [
+    {
+        "name": "document",
+        "uri_template": "graphrag://document/{document_id}",
+        "description": "Document resource by canonical document identifier.",
+    },
+    {
+        "name": "chunk",
+        "uri_template": "graphrag://chunk/{chunk_id}",
+        "description": "Chunk resource by canonical chunk identifier.",
+    },
+    {
+        "name": "entity",
+        "uri_template": "graphrag://entity/{entity_id}",
+        "description": "Entity resource by canonical entity identifier.",
+    },
+    {
+        "name": "retrieval",
+        "uri_template": "graphrag://retrieval/{retrieval_id}",
+        "description": "Retrieval trace resource by retrieval identifier.",
+    },
+    {
+        "name": "graph-status",
+        "uri_template": "graphrag://graph/status",
+        "description": "Current graph status resource.",
+    },
+]
+
+
+def build_initialize_result(config: AppConfig) -> dict[str, Any]:
+    return {
+        "protocolVersion": "2024-11-05",
+        "serverInfo": {
+            "name": config.app_name,
+            "version": config.app_version,
+        },
+        "capabilities": {
+            "tools": {"listChanged": False},
+            "resources": {"listChanged": False},
+        },
+    }
+
+
+def build_tools_list_result() -> dict[str, Any]:
+    return {
+        "tools": [
+            {
+                "name": tool_name,
+                "description": f"{tool_name} tool",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": True,
+                },
+            }
+            for tool_name in FROZEN_TOOL_NAMES
+        ]
+    }
+
+
+def build_resources_list_result() -> dict[str, Any]:
+    return {
+        "resources": [
+            {
+                "name": item["name"],
+                "uriTemplate": item["uri_template"],
+                "description": item["description"],
+            }
+            for item in FROZEN_RESOURCE_DEFINITIONS
+        ]
+    }
 
 
 class ReadyResponse(BaseModel):
@@ -151,7 +245,225 @@ def request_id_from_http_headers(request: Request) -> str:
     return str(uuid.uuid4())
 
 
+def _authorization_query_value(request: Request) -> str | None:
+    value = request.headers.get("authorization")
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized if normalized else None
+
+
+def _query_items_with_authorization(request: Request) -> list[tuple[str, str]]:
+    items = list(request.query_params.multi_items())
+    authorization = _authorization_query_value(request)
+    if authorization is None:
+        return items
+    return [item for item in items if item[0] != "authorization"] + [
+        ("authorization", authorization)
+    ]
+
+
+def _query_string_from_request(request: Request) -> str:
+    items = _query_items_with_authorization(request)
+    if not items:
+        return ""
+    from urllib.parse import urlencode
+
+    return urlencode(items)
+
+
+def _full_path_with_query(request: Request) -> str:
+    query_string = _query_string_from_request(request)
+    if not query_string:
+        return request.url.path
+    return f"{request.url.path}?{query_string}"
+
+
+def _request_body_text(body: bytes) -> str | None:
+    if not body:
+        return None
+    return body.decode("utf-8")
+
+
+def _response_from_streamable_result(result: Any) -> Response:
+    payload = getattr(result, "payload", None)
+    status_code = getattr(result, "status_code", 200)
+    headers = dict(getattr(result, "headers", {}) or {})
+
+    if payload is None:
+        return Response(
+            content=b"",
+            status_code=status_code,
+            headers=headers,
+        )
+
+    headers.setdefault("content-type", "application/json")
+    return Response(
+        content=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        status_code=status_code,
+        headers=headers,
+        media_type="application/json",
+    )
+
+
 async def invoke_tool(
+    *,
+    config: AppConfig,
+    database: Database,
+    graphrag: GraphRAGApplicationService,
+    tool_name: str,
+    arguments: dict[str, Any],
+    identity: str,
+    request_id: str,
+) -> dict[str, Any]:
+    LOGGER.info(
+        "Invoking tool",
+        extra={
+            "event": "tool_invocation",
+            "tool_name": tool_name,
+            "tool_arguments": arguments,
+            "request_id": request_id,
+            "authenticated_identity": identity,
+        },
+    )
+
+    if tool_name == "health_check":
+        db_status = database.get_status().to_dict()
+        return {
+            "status": "ok" if db_status["is_ready"] else "degraded",
+            "app_name": config.app_name,
+            "version": config.app_version,
+            "environment": config.env,
+            "database": db_status,
+        }
+
+    if tool_name == "index_status":
+        db_status = database.get_status().to_dict()
+        return {
+            "embedding_provider": config.embedding_provider,
+            "embedding_model": config.embedding_model,
+            "embedding_dimensions": config.embedding_dimensions,
+            "max_vector_candidates": config.max_vector_candidates,
+            "max_return_chunks": config.max_return_chunks,
+            "database_ready": db_status["is_ready"],
+            "vector_extension_installed": db_status["vector_extension_installed"],
+            "document_table_exists": db_status["document_table_exists"],
+            "chunk_table_exists": db_status["chunk_table_exists"],
+        }
+
+    if tool_name == "graph_status":
+        db_status = database.get_status().to_dict()
+        return {
+            "graph_name": config.age_graph_name,
+            "max_graph_hops": config.max_graph_hops,
+            "max_return_entities": config.max_return_entities,
+            "age_extension_installed": db_status["age_extension_installed"],
+            "age_graph_exists": db_status["age_graph_exists"],
+            "database_ready": db_status["is_ready"],
+        }
+
+    if tool_name == "document_ingest":
+        return graphrag.document_ingest(
+            IngestDocumentCommand(
+                tenant_id=str(arguments.get("tenant_id", "default")),
+                source_uri=str(arguments.get("source_uri", "")),
+                title=str(arguments.get("title", "")),
+                text=str(arguments.get("text", arguments.get("content", ""))),
+                mime_type=str(arguments.get("mime_type", "text/plain")),
+                metadata=arguments.get("metadata")
+                if isinstance(arguments.get("metadata"), dict)
+                else {},
+                reingest=bool(arguments.get("reingest", True)),
+            )
+        )
+
+    if tool_name == "document_reingest":
+        return graphrag.document_reingest(
+            IngestDocumentCommand(
+                tenant_id=str(arguments.get("tenant_id", "default")),
+                source_uri=str(arguments.get("source_uri", "")),
+                title=str(arguments.get("title", "")),
+                text=str(arguments.get("text", arguments.get("content", ""))),
+                mime_type=str(arguments.get("mime_type", "text/plain")),
+                metadata=arguments.get("metadata")
+                if isinstance(arguments.get("metadata"), dict)
+                else {},
+                reingest=True,
+            )
+        )
+
+    if tool_name == "document_delete":
+        return graphrag.document_delete(
+            document_id=str(arguments.get("document_id", ""))
+        )
+
+    if tool_name == "graph_refresh":
+        document_id = arguments.get("document_id")
+        return graphrag.graph_refresh(
+            GraphRefreshCommand(
+                document_id=uuid.UUID(str(document_id)) if document_id else None,
+                full_rebuild=bool(arguments.get("full_rebuild", False)),
+            )
+        )
+
+    if tool_name == "retrieve_naive":
+        return graphrag.retrieve_naive(
+            RetrievalCommand(
+                query=str(arguments.get("query", "")),
+                top_k=int(arguments.get("top_k", 5)),
+            )
+        )
+
+    if tool_name == "entity_search":
+        return graphrag.entity_search(
+            EntitySearchCommand(
+                query=str(arguments.get("query", "")),
+                limit=int(arguments.get("limit", config.max_return_entities)),
+            )
+        )
+
+    if tool_name == "entity_expand":
+        return graphrag.entity_expand(
+            EntityExpandCommand(
+                entity_id=uuid.UUID(str(arguments.get("entity_id", ""))),
+                hops=int(arguments.get("hops", 1)),
+                limit=int(arguments.get("limit", config.max_return_entities)),
+            )
+        )
+
+    if tool_name == "retrieve_local_graph":
+        return graphrag.retrieve_local_graph(
+            RetrievalCommand(
+                query=str(arguments.get("query", "")),
+                top_k=int(arguments.get("top_k", 5)),
+                graph_limit=int(
+                    arguments.get("graph_limit", config.max_return_entities)
+                ),
+            )
+        )
+
+    if tool_name == "retrieve_hybrid":
+        return graphrag.retrieve_hybrid(
+            RetrievalCommand(
+                query=str(arguments.get("query", "")),
+                top_k=int(arguments.get("top_k", 5)),
+                graph_limit=int(
+                    arguments.get("graph_limit", config.max_return_entities)
+                ),
+            )
+        )
+
+    if tool_name == "source_trace":
+        return graphrag.source_trace(
+            SourceTraceCommand(
+                retrieval_id=uuid.UUID(str(arguments.get("retrieval_id", ""))),
+            )
+        )
+
+    raise HTTPException(status_code=404, detail=f"Unsupported tool: {tool_name}")
+
+
+def _invoke_tool_sync(
     *,
     config: AppConfig,
     database: Database,
@@ -320,6 +632,129 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         graphrag=graphrag,
     )
 
+    class _StreamableHttpRuntimeAdapter:
+        def handle_rpc_request(
+            self,
+            request: dict[str, Any],
+        ) -> dict[str, Any] | None:
+            request_id = request.get("id")
+            method = request.get("method")
+            raw_params = request.get("params")
+
+            if method == "initialize":
+                return JsonRpcResponse(
+                    id=request_id,
+                    result=build_initialize_result(container.config),
+                ).model_dump(exclude_none=True)
+
+            if method == "tools/list":
+                return JsonRpcResponse(
+                    id=request_id,
+                    result=build_tools_list_result(),
+                ).model_dump(exclude_none=True)
+
+            if method == "resources/list":
+                return JsonRpcResponse(
+                    id=request_id,
+                    result=build_resources_list_result(),
+                ).model_dump(exclude_none=True)
+
+            if isinstance(method, str) and method.startswith("notifications/"):
+                LOGGER.info(
+                    "Ignoring MCP notification",
+                    extra={
+                        "event": "ignored_mcp_notification",
+                        "request_id": request_id,
+                        "authenticated_identity": "streamable-http",
+                        "method": method,
+                    },
+                )
+                return None
+
+            if method not in {"tools/call", "tool.call"}:
+                LOGGER.warning(
+                    "Unsupported MCP method received",
+                    extra={
+                        "event": "unsupported_mcp_method",
+                        "request_id": request_id,
+                        "authenticated_identity": "streamable-http",
+                        "method": method,
+                        "params_type": type(raw_params).__name__,
+                        "params_preview": raw_params
+                        if isinstance(raw_params, dict)
+                        else None,
+                    },
+                )
+                return JsonRpcResponse(
+                    id=request_id,
+                    error=JsonRpcError(
+                        code=-32601,
+                        message="Method not found.",
+                        data={"method": method},
+                    ),
+                ).model_dump(exclude_none=True)
+
+            try:
+                tool_params = normalize_tool_params(raw_params)
+            except ValueError as exc:
+                return JsonRpcResponse(
+                    id=request_id,
+                    error=JsonRpcError(
+                        code=-32602,
+                        message="Invalid params.",
+                        data={"reason": str(exc)},
+                    ),
+                ).model_dump(exclude_none=True)
+
+            effective_request_id = (
+                str(request_id) if request_id is not None else str(uuid.uuid4())
+            )
+
+            try:
+                result = _invoke_tool_sync(
+                    config=container.config,
+                    database=container.database,
+                    graphrag=container.graphrag,
+                    tool_name=tool_params.name,
+                    arguments=tool_params.arguments,
+                    identity="streamable-http",
+                    request_id=effective_request_id,
+                )
+                return JsonRpcResponse(id=request_id, result=result).model_dump(
+                    exclude_none=True
+                )
+            except HTTPException as exc:
+                return JsonRpcResponse(
+                    id=request_id,
+                    error=JsonRpcError(
+                        code=-32601 if exc.status_code == 404 else -32000,
+                        message=str(exc.detail),
+                    ),
+                ).model_dump(exclude_none=True)
+            except Exception as exc:
+                LOGGER.exception(
+                    "Unhandled MCP tool execution error",
+                    extra={
+                        "event": "tool_invocation_failed",
+                        "request_id": request_id,
+                        "authenticated_identity": "streamable-http",
+                        "error_type": type(exc).__name__,
+                    },
+                )
+                return JsonRpcResponse(
+                    id=request_id,
+                    error=JsonRpcError(
+                        code=-32603,
+                        message="Internal error.",
+                        data={"reason": str(exc)},
+                    ),
+                ).model_dump(exclude_none=True)
+
+    streamable_endpoint = build_streamable_http_endpoint(
+        _StreamableHttpRuntimeAdapter(),
+        mcp_path=resolved_config.http_path,
+    )
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.container = container
@@ -455,6 +890,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                 "service": resolved_config.app_name,
                 "version": resolved_config.app_version,
                 "protocol": "remote-mcp-http",
+                "transport": "streamable-http",
                 "status": "ok",
                 "authenticated_identity": identity,
                 "auth_mode": x_auth_mode or request.headers.get("X-Auth-Mode"),
@@ -491,7 +927,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             default=None,
             alias="X-Auth-Mode",
         ),
-    ) -> JSONResponse:
+    ) -> Response:
         identity = (
             x_authenticated_identity
             or x_auth_user
@@ -499,113 +935,24 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             or request.headers.get("X-Auth-User")
             or request.headers.get("x-auth-user")
         )
-        request_id: str | int | None = None
 
         if not identity:
             return jsonrpc_error(
-                request_id,
+                None,
                 -32001,
                 "Missing authenticated identity header.",
                 http_status=401,
             )
 
-        try:
-            raw_body = await request.json()
-        except Exception:
-            return jsonrpc_error(
-                request_id,
-                -32700,
-                "Parse error.",
-                http_status=400,
+        body = await request.body()
+        result = streamable_endpoint.handle(
+            StreamableHttpRequest(
+                path=_full_path_with_query(request),
+                body=_request_body_text(body),
+                headers={key.lower(): value for key, value in request.headers.items()},
             )
-
-        if not isinstance(raw_body, dict):
-            return jsonrpc_error(
-                request_id,
-                -32600,
-                "Invalid Request.",
-                data={"reason": "Request body must be a JSON object."},
-                http_status=400,
-            )
-
-        try:
-            rpc_request = JsonRpcRequest.model_validate(raw_body)
-            request_id = rpc_request.id
-        except Exception as exc:
-            return jsonrpc_error(
-                request_id,
-                -32600,
-                "Invalid Request.",
-                data={"reason": str(exc)},
-                http_status=400,
-            )
-
-        if rpc_request.method not in {"tools/call", "tool.call"}:
-            return jsonrpc_error(
-                request_id,
-                -32601,
-                "Method not found.",
-                data={"method": rpc_request.method},
-                http_status=404,
-            )
-
-        try:
-            tool_params = normalize_tool_params(rpc_request.params)
-        except ValueError as exc:
-            return jsonrpc_error(
-                request_id,
-                -32602,
-                "Invalid params.",
-                data={"reason": str(exc)},
-                http_status=400,
-            )
-
-        try:
-            effective_request_id = (
-                str(request_id)
-                if request_id is not None
-                else request_id_from_http_headers(request)
-            )
-            container: ServiceContainer = app.state.container
-            result = await invoke_tool(
-                config=container.config,
-                database=container.database,
-                graphrag=container.graphrag,
-                tool_name=tool_params.name,
-                arguments=tool_params.arguments,
-                identity=identity,
-                request_id=effective_request_id,
-            )
-            if isinstance(result, dict) and x_auth_mode:
-                result = {
-                    **result,
-                    "auth_mode": x_auth_mode,
-                }
-            return jsonrpc_result(request_id, result)
-        except HTTPException as exc:
-            return jsonrpc_error(
-                request_id,
-                -32601 if exc.status_code == 404 else -32000,
-                exc.detail,
-                http_status=exc.status_code,
-            )
-        except Exception as exc:
-            LOGGER.exception(
-                "Unhandled MCP tool execution error",
-                extra={
-                    "event": "tool_invocation_failed",
-                    "request_id": request_id,
-                    "authenticated_identity": identity,
-                    "error_type": type(exc).__name__,
-                },
-            )
-            return jsonrpc_error(
-                request_id,
-                -32603,
-                "Internal error.",
-                data={"reason": str(exc)},
-                http_status=500,
-            )
+        )
+        return _response_from_streamable_result(result)
 
     if resolved_config.enable_debug_endpoints:
 
