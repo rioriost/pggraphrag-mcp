@@ -13,10 +13,10 @@ Use this checklist before creating a release tag or declaring the repository rea
 ## 1. Repository hygiene
 
 - [ ] working tree is clean
-- [ ] no accidental local artifacts are present
-  - [ ] `.DS_Store`
-  - [ ] temporary notes
-  - [ ] local scratch files
+- [x] no accidental local artifacts are present
+  - [x] `.DS_Store`
+  - [x] temporary notes
+  - [x] local scratch files
 - [x] committed files match the intended public milestone
 - [x] placeholder or local-only assets are clearly identified
 - [x] docs reflect the current implemented behavior
@@ -25,7 +25,7 @@ Use this checklist before creating a release tag or declaring the repository rea
 
 ## 2. Environment preparation
 
-- [ ] `.env.example` is current
+- [x] `.env.example` is current
 - [ ] `.env.production.example` is current
 - [x] required environment variables are documented
 - [x] local TLS certificate instructions are valid
@@ -73,6 +73,7 @@ Expected result:
 
 - [ ] lint workflow is green
 - [ ] test workflow is green
+- [ ] smoke workflow is green
 - [x] smoke workflow configuration is valid
 
 ---
@@ -113,7 +114,7 @@ Expected result:
 
 - [x] unauthenticated `/mcp` request is rejected
 - [x] authenticated `/mcp` request is accepted
-- [ ] forwarded auth headers are present as expected
+- [x] forwarded auth headers are present as expected
 - [x] auth logs can be correlated with app logs via request context
 
 Expected result:
@@ -128,7 +129,7 @@ Expected result:
 - [x] schema apply script exists
   - [x] `scripts/apply_schema.py`
 - [ ] schema apply dry-run / check-only path works
-- [ ] explicit schema apply path works
+- [x] explicit schema apply path works
 - [x] `pgvector` extension is available
 - [x] `Apache AGE` extension is available
 - [x] canonical relational tables exist
@@ -164,8 +165,8 @@ Recommended verification commands:
 - [ ] full graph rebuild is repeatable
 - [x] graph refresh metadata is recorded
 - [x] ops automation status command works
-- [ ] ops automation readiness check works
-- [ ] ops automation wait-ready flow works
+- [x] ops automation readiness check works
+- [x] ops automation wait-ready flow works
 - [x] ops automation bootstrap with readiness wait works
 - [ ] ops automation plan mode works for ordered maintenance steps
 
@@ -191,6 +192,8 @@ Expected result:
 - [x] readiness checks report the graph as ready after successful bootstrap
 - [x] operator automation can run status, bootstrap, and readiness validation without manual command stitching
 - [ ] packaged host-side automation uses a DSN that is valid from the host runtime, not only from inside compose
+- [x] in-network AI-agent registration path works with the generated local MCP URL and bearer token
+- [x] local HTTPS endpoint serves the generated `localhost` certificate rather than the Traefik default certificate
 
 ---
 
@@ -238,6 +241,7 @@ Expected smoke coverage:
 - [x] authenticated `retrieve_hybrid`
 - [x] authenticated `source_trace`
 - [x] compose-backed smoke evidence captured locally against `https://localhost:9443/mcp`
+- [x] AI agent can discover tools from the registered local MCP server
 
 ---
 
@@ -330,7 +334,7 @@ Expected log fields include:
 - [x] `request_id`
 - [x] `authenticated_identity`
 - [x] `event`
-- [ ] `duration_ms`
+- [x] `duration_ms`
 
 ---
 
@@ -354,11 +358,11 @@ Freeze these tool names for `v0.1.0`:
 
 Freeze these resource URI templates for `v0.1.0`:
 
-- [ ] `graphrag://document/{document_id}`
-- [ ] `graphrag://chunk/{chunk_id}`
-- [ ] `graphrag://entity/{entity_id}`
-- [ ] `graphrag://retrieval/{retrieval_id}`
-- [ ] `graphrag://graph/status`
+- [x] `graphrag://document/{document_id}`
+- [x] `graphrag://chunk/{chunk_id}`
+- [x] `graphrag://entity/{entity_id}`
+- [x] `graphrag://retrieval/{retrieval_id}`
+- [x] `graphrag://graph/status`
 
 - [x] schema snapshot file exists
   - [x] `schemas/mcp/public-surface.v0.1.0.json`

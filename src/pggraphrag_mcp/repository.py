@@ -2134,8 +2134,6 @@ class GraphRagRepository:
         for row in rows:
             chunk_embedding = self._parse_vector_text(row["embedding_text"])
             embedding_score = cosine_similarity(query_embedding, chunk_embedding)
-            if embedding_score <= 0.0:
-                continue
 
             scored.append(
                 {
