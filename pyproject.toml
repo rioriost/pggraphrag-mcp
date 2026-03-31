@@ -20,6 +20,7 @@ dependencies = [
 pggraphrag-mcp = "pggraphrag_mcp:main"
 pggraphrag-mcp-http = "pggraphrag_mcp.http_app:main"
 pggraphrag-mcp-smoke = "scripts.mcp_http_smoke:main"
+pggraphrag-mcp-ops = "pggraphrag_mcp.ops_automation:main"
 
 [project.optional-dependencies]
 test = [

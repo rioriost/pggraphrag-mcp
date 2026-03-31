@@ -136,23 +136,45 @@ Recommended verification commands:
 
 - [ ] graph bootstrap / rebuild script exists
   - [ ] `scripts/bootstrap_graph.py`
+- [ ] ops automation script exists
+  - [ ] `scripts/ops_automation.py`
+- [x] packaged ops automation entrypoint exists
+  - [x] `pggraphrag-mcp-ops`
+  - [x] packaging/runtime import issue is resolved for `uv run pggraphrag-mcp-ops`
+  - [ ] host-runtime caveat is documented: the packaged CLI still needs a host-reachable `PGGRAPHRAG_MCP_DATABASE_URL` when run outside the compose network
 - [ ] graph status command works
 - [ ] document-scoped graph refresh works
 - [ ] full graph rebuild works
 - [ ] full graph rebuild is repeatable
 - [ ] graph refresh metadata is recorded
+- [ ] ops automation status command works
+- [ ] ops automation readiness check works
+- [ ] ops automation wait-ready flow works
+- [ ] ops automation bootstrap with readiness wait works
+- [ ] ops automation plan mode works for ordered maintenance steps
 
 Recommended verification commands:
 
 - [ ] `PGGRAPHRAG_MCP_DATABASE_URL="postgresql://pggraphrag_app:change-me-db-password@pggraphrag-db:5432/pggraphrag" uv run python scripts/bootstrap_graph.py --status --pretty`
 - [ ] `PGGRAPHRAG_MCP_DATABASE_URL="postgresql://pggraphrag_app:change-me-db-password@pggraphrag-db:5432/pggraphrag" uv run python scripts/bootstrap_graph.py --full-rebuild --pretty`
 - [ ] `PGGRAPHRAG_MCP_DATABASE_URL="postgresql://pggraphrag_app:change-me-db-password@pggraphrag-db:5432/pggraphrag" uv run python scripts/bootstrap_graph.py --document-id "<document-uuid>" --pretty`
+- [ ] `PGGRAPHRAG_MCP_DATABASE_URL="<host-reachable-postgres-dsn>" uv run pggraphrag-mcp-ops status`
+- [ ] `PGGRAPHRAG_MCP_DATABASE_URL="<host-reachable-postgres-dsn>" uv run pggraphrag-mcp-ops ensure-ready`
+- [ ] `PGGRAPHRAG_MCP_DATABASE_URL="<host-reachable-postgres-dsn>" uv run pggraphrag-mcp-ops bootstrap --wait-ready`
+- [ ] `PGGRAPHRAG_MCP_DATABASE_URL="<host-reachable-postgres-dsn>" uv run pggraphrag-mcp-ops plan --actions status bootstrap ensure-ready --wait-ready`
+- [x] packaged entrypoint help path works
+  - [x] `PGGRAPHRAG_MCP_DATABASE_URL="postgresql://pggraphrag_app:change-me-db-password@pggraphrag-db:5432/pggraphrag" uv run pggraphrag-mcp-ops --help`
+- [x] direct script fallback works for the same automation flow
+  - [x] `uv run python scripts/ops_automation.py bootstrap --wait-ready`
 
 Expected result:
 
 - [ ] graph exists
 - [ ] projected node counts are non-zero after ingest
 - [ ] projected edge counts are non-zero after ingest
+- [ ] readiness checks report the graph as ready after successful bootstrap
+- [ ] operator automation can run status, bootstrap, and readiness validation without manual command stitching
+- [ ] packaged host-side automation uses a DSN that is valid from the host runtime, not only from inside compose
 
 ---
 
@@ -183,22 +205,23 @@ Expected result:
 
 ## 10. Smoke validation
 
-- [ ] smoke script exists
-  - [ ] `scripts/mcp_http_smoke.py`
-- [ ] smoke test runs successfully against the verified local endpoint
+- [x] smoke script exists
+  - [x] `scripts/mcp_http_smoke.py`
+- [x] smoke test runs successfully against the verified local endpoint
 
 Recommended command:
 
-- [ ] `uv run python scripts/mcp_http_smoke.py --base-url https://localhost:9443 --mcp-path /mcp --bearer-token change-me-local-token --insecure`
+- [x] `uv run python scripts/mcp_http_smoke.py --base-url https://localhost:9443 --mcp-path /mcp --bearer-token change-me-local-token --insecure`
 
 Expected smoke coverage:
 
-- [ ] unauthorized rejection
-- [ ] authenticated `health_check`
-- [ ] authenticated `index_status`
-- [ ] seeded `document_ingest`
-- [ ] authenticated `retrieve_hybrid`
-- [ ] authenticated `source_trace`
+- [x] unauthorized rejection
+- [x] authenticated `health_check`
+- [x] authenticated `index_status`
+- [x] seeded `document_ingest`
+- [x] authenticated `retrieve_hybrid`
+- [x] authenticated `source_trace`
+- [x] compose-backed smoke evidence captured locally against `https://localhost:9443/mcp`
 
 ---
 

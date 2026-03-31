@@ -58,6 +58,7 @@ Expected actions:
 - prepare `.env`
 - generate local TLS assets
 - build and start compose services
+- run graph readiness automation from a compose-connected runtime
 - run `scripts/mcp_http_smoke.py`
 - collect logs on failure
 - tear down the stack
@@ -97,6 +98,11 @@ docker volume rm pggraphrag_db_data
 #### Start the full stack
 ```/dev/null/sh#L1-1
 COMPOSE_PROJECT_NAME=pggraphrag_mcp docker compose --env-file .env -f docker/docker-compose.yml -f docker/docker-compose.small-auth.yml up -d --build
+```
+
+#### Run graph readiness automation from a compose-connected runtime
+```/dev/null/sh#L1-1
+docker exec pggraphrag-mcp-private uv run pggraphrag-mcp-ops bootstrap --wait-ready
 ```
 
 #### Run the smoke script
@@ -172,9 +178,10 @@ A correct smoke job should follow this order:
 6. install dependencies
 7. start compose stack
 8. wait briefly for services to become healthy
-9. run smoke script
-10. collect compose logs on failure
-11. tear down compose stack
+9. run graph readiness automation from a compose-connected runtime
+10. run smoke script
+11. collect compose logs on failure
+12. tear down compose stack
 
 ## Expected public endpoint
 

@@ -19,7 +19,7 @@ The current implementation targets a local Docker Compose workflow with:
 
 The repository also includes CI validation for clean-checkout test execution with Python 3.12 and `uv`.
 
-It now also includes explicit operational scripts for schema application and graph bootstrap / rebuild flows.
+It now also includes explicit operational scripts for schema application, graph bootstrap / rebuild flows, and higher-level operator automation for graph readiness checks.
 
 The CI workflow also includes a separate smoke job path intended for full-stack HTTPS validation with Docker Compose, generated local TLS assets, and the repository smoke script.
 
@@ -86,6 +86,7 @@ The CI workflow also includes a separate smoke job path intended for full-stack 
 ### Explicit operations
 - schema application can be run explicitly
 - graph bootstrap and rebuild can be run explicitly
+- graph status, readiness checks, and bootstrap sequencing can also be automated explicitly
 - these operations are repeatable and intended for operator use
 - detailed operator procedures are documented under `docs/operations/` and the release checklist is documented separately
 
@@ -206,11 +207,27 @@ Recommended operations:
 - AGE bootstrap
 - graph refresh by document
 - full graph rebuild
+- graph readiness checks
+- operator automation plans that combine status, bootstrap, and readiness validation
+
+Primary entrypoints:
+- `uv run python scripts/apply_schema.py --help`
+- `uv run python scripts/bootstrap_graph.py --help`
+- `uv run python scripts/ops_automation.py --help`
+- `uv run pggraphrag-mcp-ops --help`
+
+Example operator automation commands:
+- `uv run pggraphrag-mcp-ops status`
+- `uv run pggraphrag-mcp-ops ensure-ready`
+- `uv run pggraphrag-mcp-ops wait-ready`
+- `uv run pggraphrag-mcp-ops bootstrap --wait-ready`
+- `uv run pggraphrag-mcp-ops plan --actions status bootstrap ensure-ready --wait-ready`
 
 Detailed procedures have been moved to focused operator docs:
 
 - `docs/operations/schema-apply.md`
 - `docs/operations/graph-bootstrap.md`
+- `docs/operations/ci-and-smoke.md`
 
 These operations should be treated as explicit maintenance flows rather than implicit side effects of unrelated commands.
 
@@ -224,9 +241,16 @@ These operations should be treated as explicit maintenance flows rather than imp
 
 This mirrors the intended CI smoke job behavior at a high level.
 
+A practical operator sequence is:
+- `uv run pggraphrag-mcp-ops status`
+- `uv run pggraphrag-mcp-ops bootstrap --wait-ready`
+- `uv run python scripts/mcp_http_smoke.py --base-url https://localhost:9443 --mcp-path /mcp --bearer-token change-me-local-token --insecure`
+- this mirrors the CI smoke path, which now runs graph readiness automation before the HTTPS smoke script
+
 Detailed smoke and CI validation steps are documented in:
 
 - `docs/operations/ci-and-smoke.md`
+- `docs/operations/graph-bootstrap.md`
 - `docs/release-checklist.md`
 
 ### Stop the stack

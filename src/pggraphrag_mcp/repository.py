@@ -31,6 +31,44 @@ def lexical_overlap_score(query: str, text: str) -> float:
     return len(query_tokens & text_tokens) / max(1, len(query_tokens))
 
 
+def coverage_overlap_score(query: str, text: str) -> float:
+    query_tokens = tokenize(query)
+    text_tokens = set(tokenize(text))
+    if not query_tokens:
+        return 0.0
+
+    informative_query_tokens = [
+        token
+        for token in query_tokens
+        if len(token) > 2
+        and token
+        not in {
+            "the",
+            "and",
+            "for",
+            "with",
+            "from",
+            "into",
+            "onto",
+            "that",
+            "this",
+            "uses",
+            "used",
+            "using",
+            "does",
+            "have",
+            "has",
+            "had",
+        }
+    ]
+    basis = informative_query_tokens or query_tokens
+    if not basis:
+        return 0.0
+
+    covered = sum(1 for token in basis if token in text_tokens)
+    return covered / max(1, len(basis))
+
+
 def jaccard_similarity_score(query: str, text: str) -> float:
     query_tokens = set(tokenize(query))
     text_tokens = set(tokenize(text))
@@ -86,24 +124,28 @@ def recency_score(rank: int, total_count: int) -> float:
 def _score_profile(profile: str) -> dict[str, float]:
     if profile == "hybrid":
         return {
-            "embedding": 0.36,
-            "lexical": 0.18,
-            "jaccard": 0.08,
+            "embedding": 0.28,
+            "lexical": 0.14,
+            "coverage": 0.12,
+            "jaccard": 0.06,
             "phrase": 0.10,
-            "proximity": 0.06,
-            "entity": 0.10,
-            "relation": 0.09,
-            "recency": 0.03,
+            "proximity": 0.05,
+            "entity": 0.11,
+            "relation": 0.10,
+            "recency": 0.02,
+            "exact_entity": 0.02,
         }
     return {
-        "embedding": 0.42,
-        "lexical": 0.22,
-        "jaccard": 0.10,
+        "embedding": 0.34,
+        "lexical": 0.18,
+        "coverage": 0.14,
+        "jaccard": 0.08,
         "phrase": 0.12,
-        "proximity": 0.06,
+        "proximity": 0.05,
         "entity": 0.05,
         "relation": 0.00,
-        "recency": 0.03,
+        "recency": 0.02,
+        "exact_entity": 0.02,
     }
 
 
@@ -131,18 +173,26 @@ def rerank_chunk_candidates(
             candidate.get("embedding_score", candidate.get("score", 0.0))
         )
         lexical_score = lexical_overlap_score(normalized_query, text)
+        coverage_score = coverage_overlap_score(normalized_query, text)
         jaccard_score = jaccard_similarity_score(normalized_query, text)
         phrase_score = phrase_match_score(normalized_query, text)
         proximity = proximity_score(normalized_query, text)
 
         entity_names = entity_names_by_chunk_id.get(chunk_id, [])
         entity_hit_score = 0.0
+        exact_entity_match_score = 0.0
         matched_entity_names: list[str] = []
+        normalized_query_key = normalize_text(normalized_query).replace(" ", "").lower()
         for entity_name in entity_names:
             entity_tokens = set(tokenize(entity_name))
+            entity_key = normalize_text(entity_name).replace(" ", "").lower()
             if query_tokens & entity_tokens:
                 entity_hit_score = 1.0
                 matched_entity_names.append(entity_name)
+            if normalized_query_key and entity_key == normalized_query_key:
+                exact_entity_match_score = 1.0
+                if entity_name not in matched_entity_names:
+                    matched_entity_names.append(entity_name)
 
         relation_count = relation_count_by_chunk_id.get(chunk_id, 0)
         relation_score = min(1.0, relation_count / 3.0)
@@ -151,12 +201,14 @@ def rerank_chunk_candidates(
         final_score = (
             (embedding_score * weights["embedding"])
             + (lexical_score * weights["lexical"])
+            + (coverage_score * weights["coverage"])
             + (jaccard_score * weights["jaccard"])
             + (phrase_score * weights["phrase"])
             + (proximity * weights["proximity"])
             + (entity_hit_score * weights["entity"])
             + (relation_score * weights["relation"])
             + (recency * weights["recency"])
+            + (exact_entity_match_score * weights["exact_entity"])
         )
 
         reranked.append(
@@ -167,10 +219,12 @@ def rerank_chunk_candidates(
                     "profile": profile,
                     "embedding_similarity": round(embedding_score, 6),
                     "lexical_overlap": round(lexical_score, 6),
+                    "coverage_overlap": round(coverage_score, 6),
                     "jaccard_similarity": round(jaccard_score, 6),
                     "phrase_match": round(phrase_score, 6),
                     "term_proximity": round(proximity, 6),
                     "entity_hit": round(entity_hit_score, 6),
+                    "exact_entity_match": round(exact_entity_match_score, 6),
                     "relation_evidence": round(relation_score, 6),
                     "relation_count": relation_count,
                     "matched_entity_names": matched_entity_names,
@@ -2640,7 +2694,7 @@ class GraphRagRepository:
     def _extract_candidate_entities(self, text: str) -> list[dict[str, Any]]:
         sentence_matches = list(re.finditer(r"[^.!?。！？]+(?:[.!?。！？]|$)", text))
         filtered: list[dict[str, Any]] = []
-        seen: set[str] = set()
+        filtered_by_key: dict[str, dict[str, Any]] = {}
 
         for sentence_match in sentence_matches:
             sentence_text = sentence_match.group(0)
@@ -2664,9 +2718,6 @@ class GraphRagRepository:
                     continue
 
                 lowered = self._canonical_entity_key(normalized)
-                if lowered in seen:
-                    continue
-                seen.add(lowered)
 
                 token_basis = normalized.split(" ")
                 aliases = self._build_entity_aliases(normalized, token_basis)
@@ -2676,20 +2727,39 @@ class GraphRagRepository:
                 start_offset = sentence_start + local_start
                 end_offset = start_offset + len(normalized)
 
-                filtered.append(
-                    {
-                        "canonical_name": normalized,
-                        "entity_type": self._infer_entity_type(normalized),
-                        "aliases": aliases,
-                        "token_basis": token_basis,
-                        "mention_count": mention_count,
-                        "start_offset": start_offset,
-                        "end_offset": end_offset,
-                        "sentence_start_offset": sentence_start,
-                        "sentence_end_offset": sentence_match.end(),
-                    }
-                )
+                candidate_payload = {
+                    "canonical_name": normalized,
+                    "entity_type": self._infer_entity_type(normalized),
+                    "aliases": aliases,
+                    "token_basis": token_basis,
+                    "mention_count": mention_count,
+                    "start_offset": start_offset,
+                    "end_offset": end_offset,
+                    "sentence_start_offset": sentence_start,
+                    "sentence_end_offset": sentence_match.end(),
+                }
 
+                existing = filtered_by_key.get(lowered)
+                if existing is None:
+                    filtered_by_key[lowered] = candidate_payload
+                    continue
+
+                existing_name = str(existing["canonical_name"])
+                existing_token_count = len(existing_name.split(" "))
+                normalized_token_count = len(token_basis)
+
+                prefer_replacement = False
+                if normalized_token_count > existing_token_count:
+                    prefer_replacement = True
+                elif normalized_token_count == existing_token_count and len(
+                    normalized
+                ) > len(existing_name):
+                    prefer_replacement = True
+
+                if prefer_replacement:
+                    filtered_by_key[lowered] = candidate_payload
+
+        filtered = list(filtered_by_key.values())
         filtered.sort(
             key=lambda item: (
                 -int(item["mention_count"]),
@@ -2930,6 +3000,12 @@ class GraphRagRepository:
             if compact != normalized and len(compact) > 4:
                 aliases.add(compact)
 
+        if len(token_basis) >= 2:
+            spaced_lower = " ".join(token_basis)
+            compact_lower = "".join(token_basis)
+            if compact_lower and compact_lower != spaced_lower:
+                aliases.add(compact_lower)
+
         if len(token_basis) > 2:
             initials = "".join(token[0] for token in token_basis if token)
             if len(initials) > 1:
@@ -2967,6 +3043,11 @@ class GraphRagRepository:
             "System",
             "Module",
             "Layer",
+            "Store",
+            "Engine",
+        }
+        protected_store_phrases = {
+            "Graph Memory Store",
         }
 
         while token_basis and token_basis[0] in leading_prefix_tokens:
@@ -2978,7 +3059,11 @@ class GraphRagRepository:
         while token_basis and token_basis[-1] in trailing_conjunction_tokens:
             token_basis = token_basis[:-1]
 
-        while len(token_basis) > 2 and token_basis[-1] in trailing_generic_role_tokens:
+        while (
+            len(token_basis) > 2
+            and token_basis[-1] in trailing_generic_role_tokens
+            and " ".join(token_basis) not in protected_store_phrases
+        ):
             token_basis = token_basis[:-1]
 
         return " ".join(token_basis).strip()
