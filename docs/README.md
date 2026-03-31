@@ -8,6 +8,7 @@
 
 - `implementation-plan.md` : 実装計画の本文
 - `plan.yaml` : フェーズ・成果物・依存関係を表した実行計画
+- `ticket-status.md` : 実装チケットの消化状況サマリ
 - `tickets/` : 実装チケット群
 - `docker-layout.md` : コンテナ/ネットワーク/秘密情報の配置方針
 - `naming-and-env.md` : 命名規則と環境変数方針
